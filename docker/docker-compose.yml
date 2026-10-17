@@ -1,0 +1,21 @@
+# Local single-node Exasol for development.
+# The image is x86_64 only: on Apple Silicon it runs under emulation (slow, needs ~8 GB RAM for Docker).
+# Pin EXASOL_IMAGE to a specific tag for reproducible environments.
+services:
+  exasol:
+    image: ${EXASOL_IMAGE:-exasol/docker-db:latest}
+    platform: linux/amd64
+    privileged: true
+    ports:
+      - "8563:8563"
+    volumes:
+      - exasol-data:/exa
+    healthcheck:
+      test: ["CMD-SHELL", "exaconf info >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 180s
+
+volumes:
+  exasol-data:
