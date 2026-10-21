@@ -227,6 +227,25 @@ class LineageGraph:
                 out[name] = gates
         return out
 
+    def influential_columns(self, table: str) -> tuple[set[str], set[str]]:
+        """Columns of ``table`` that matter downstream, as ``(gating, derived)``.
+
+        A column is *gating* if it, or any column computed from it further down, decides which rows
+        survive a JOIN/WHERE/GROUP BY. ``RAW.SHOP_ORDER_LINES.PRODUCT_ID`` is gating although the
+        join happens two layers later. A column is *derived* if downstream values are computed from it.
+        """
+        gating: set[str] = set()
+        derived: set[str] = set()
+        for node, data in self.g.nodes(data=True):
+            if data["type"] != "column" or data["table"] != table:
+                continue
+            descendants = [node, *self._walk(node, lambda n: self._successors(n, EdgeKind.DERIVES))]
+            if any(any(True for _ in self._successors(d, EdgeKind.GATES)) for d in descendants):
+                gating.add(data["name"])
+            if len(descendants) > 1:
+                derived.add(data["name"])
+        return gating, derived
+
     def impact(self, table: str, since: date | None = None, until: date | None = None) -> Impact:
         """Blast radius of bad data in ``table``: every downstream table, and every actor that read
         affected data (within the window) or rebuilt something from it."""

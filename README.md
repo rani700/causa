@@ -17,8 +17,8 @@ features break revenue down but assume the data is correct. Causa joins the two.
 |---|---|
 | Synthetic company simulator (benchmark with ground truth) | ✅ |
 | 1. Lineage from the query log (column-level + row-gating predicates + blast radius) | ✅ |
-| 2. Data health detectors (freshness, volume, schema drift, null/dup spikes) | ⏳ next |
-| 3. Metric attribution (Shapley / Adtributor-style decomposition, pushed down to Exasol) | ⏳ |
+| 2. Data health detectors, lineage-focused, grouped into cases | ✅ |
+| 3. Metric attribution (Shapley / Adtributor-style decomposition, pushed down to Exasol) | ⏳ next |
 | 4. Business-vs-data classifier | ⏳ |
 | 5. Counterfactual replay + recall | ⏳ |
 | Investigator agent, API, Slack, UI | ⏳ |
@@ -31,6 +31,8 @@ uv run causa sim scenario          # the business events and data incidents that
 uv run causa sim run               # build 168 days of a simulated company's warehouse (~70s on DuckDB)
 uv run causa lineage trace RPT.V_EXEC_REVENUE_DAILY --column NET_REVENUE_EUR
 uv run causa lineage impact RAW.SHOP_ORDERS --since 2026-10-06 --until 2026-10-12
+uv run causa health scan --since 2026-05-25 --until 2026-10-17
+uv run causa eval health           # score the health engine against ground truth
 make test
 ```
 
@@ -77,6 +79,30 @@ Built purely from the query log, with no instrumentation:
   from session client strings
 - `impact()` computes the blast radius of a bad table over a time window
 
+### Engine 2: data health (`causa.health`)
+
+Zero-configuration monitoring that uses lineage to decide *what* matters:
+
+- **discovery**: load timestamp, segment column (feed, currency...), event time, and the smallest
+  key that is unique on almost every load day (so a duplicate load cannot hide its own key)
+- **columns watched**: keys plus every column that gates rows downstream, directly or through
+  columns derived from it; numeric columns only if downstream values are computed from them
+- **one pushed-down query per table** returns daily volume, null counts, means, lateness and
+  duplicate keys per segment; **row conservation** is checked along every pipeline edge
+- **robust detection**: trailing-only median/MAD baselines, weekday-aware volume, Poisson and
+  small-sample binomial floors, and a minimum practical effect per signal
+- **query-log checks**: schema changes (attributed to the actor), failed writes and their re-runs,
+  new category values (new market, new currency)
+- **lineage-aware de-duplication**: an anomaly echoed downstream is folded into its upstream root;
+  related roots are grouped into **cases** whose headline is the most telling incident
+- **mix-aware severity**: a shifted mean over a mixed population (e.g. discounts during a promotion)
+  is capped at medium; the same shift in a reference table (FX rates) is critical
+
+On the default scenario and two unseen seeds, `causa eval health` gives 100% recall on data
+incidents, 100% calm on business changes (none raised above medium) and 100% alert precision.
+The simulator is the benchmark, so these numbers say the engine works on these incident types,
+not that it will on every warehouse.
+
 ## Layout
 
 ```
@@ -84,6 +110,8 @@ src/causa/
   warehouse/     Exasol (pyexasol) and DuckDB backends behind one interface
   sources/       query-log sources (Exasol audit log, table) and the catalog
   lineage/       statement parser, actor identification, lineage graph
+  health/        monitor discovery, profiling SQL, detectors, cases
+  evaluation.py  scoring against the simulator's ground truth
   simulator/     synthetic company, scenario, incidents, workloads
   cli.py
 tests/

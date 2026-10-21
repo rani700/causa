@@ -11,6 +11,8 @@ from rich.console import Console
 from rich.progress import Progress
 from rich.table import Table
 
+from causa.evaluation import evaluate_health, load_events
+from causa.health import HealthReport, HealthScanner, Severity
 from causa.lineage import LineageGraph, build_lineage
 from causa.simulator.runner import run_simulation
 from causa.simulator.scenario import default_scenario
@@ -21,8 +23,12 @@ from causa.warehouse import Warehouse, connect
 app = typer.Typer(no_args_is_help=True, help="Causa: root-cause engine for business metrics.")
 sim_app = typer.Typer(no_args_is_help=True, help="Synthetic company simulator (benchmark + demo data).")
 lineage_app = typer.Typer(no_args_is_help=True, help="Lineage reconstructed from the query log.")
+health_app = typer.Typer(no_args_is_help=True, help="Data health incidents, focused by lineage.")
+eval_app = typer.Typer(no_args_is_help=True, help="Score Causa against the simulator's ground truth.")
 app.add_typer(sim_app, name="sim")
 app.add_typer(lineage_app, name="lineage")
+app.add_typer(health_app, name="health")
+app.add_typer(eval_app, name="eval")
 console = Console()
 
 
@@ -73,10 +79,13 @@ QueryLogOption = Annotated[
 ]
 
 
+def _query_log(wh: Warehouse, query_log: str) -> QueryLogSource:
+    return ExasolAuditLog(wh) if query_log == "audit" else TableQueryLog(wh, query_log)
+
+
 def _load_lineage(wh: Warehouse, query_log: str) -> LineageGraph:
-    source: QueryLogSource = ExasolAuditLog(wh) if query_log == "audit" else TableQueryLog(wh, query_log)
     with console.status("Reconstructing lineage from the query log"):
-        return build_lineage(source.fetch(), Catalog.load(wh))
+        return build_lineage(_query_log(wh, query_log).fetch(), Catalog.load(wh))
 
 
 @lineage_app.command("trace")
@@ -120,6 +129,72 @@ def impact(
         last = f"{a.last_read:%Y-%m-%d %H:%M}" if a.last_read else ""
         out.add_row(a.kind, a.name, str(a.reads), last, ", ".join(a.via), ", ".join(a.writes))
     console.print(out)
+
+
+def _health_report(wh: Warehouse, since: date, until: date, query_log: str) -> HealthReport:
+    log_frame = _query_log(wh, query_log).fetch()
+    catalog = Catalog.load(wh)
+    graph = build_lineage(log_frame, catalog)
+    with console.status("Profiling monitored tables"):
+        return HealthScanner(wh, catalog, graph).scan(since, until, log_frame)
+
+
+_SEVERITY_STYLE = {Severity.CRITICAL: "bold red", Severity.HIGH: "red", Severity.MEDIUM: "yellow", Severity.LOW: "dim"}
+
+
+@health_app.command("scan")
+def health_scan(
+    since: Annotated[str, typer.Option(help="First day to report (ISO).")],
+    until: Annotated[str, typer.Option(help="Last day to report (ISO).")],
+    min_severity: Annotated[Severity, typer.Option(help="Hide incidents below this severity.")] = Severity.LOW,
+    query_log: QueryLogOption = "OPS.QUERY_LOG",
+) -> None:
+    """Find data health incidents between SINCE and UNTIL."""
+    order = list(Severity)
+    with connect() as wh:
+        report = _health_report(wh, date.fromisoformat(since), date.fromisoformat(until), query_log)
+    shown = [c for c in report.cases if order.index(c.severity) <= order.index(min_severity)]
+    echoes = sum(len(i.propagated) for i in report.incidents)
+    console.print(
+        f"Monitored {len(report.monitors)} tables: {len(report.incidents)} root incidents "
+        f"({echoes} downstream echoes folded in), grouped into [bold]{len(report.cases)}[/] cases\n"
+    )
+    for case in shown:
+        style = _SEVERITY_STYLE[case.severity]
+        span = f"{case.start}" if case.end == case.start else f"{case.start} -> {case.end}"
+        console.print(f"[{style}]{case.severity.value.upper():8}[/] [bold]{case.case_id}[/]  {span}")
+        console.print(f"  [bold]{case.primary.signal.value}[/]: {case.primary.summary}")
+        for i in case.incidents:
+            if i is not case.primary:
+                console.print(f"  [dim]+ {i.signal.value}: {i.summary}[/]")
+        console.print(f"  [dim]tables: {', '.join(case.tables)}[/]\n")
+
+
+@eval_app.command("health")
+def eval_health(
+    since: Annotated[str, typer.Option(help="First day to score (ISO).")] = "2026-06-01",
+    until: Annotated[str, typer.Option(help="Last day to score (ISO).")] = "2026-10-17",
+) -> None:
+    """Did the health engine alert on every data incident, and stay calm on business changes?"""
+    with connect() as wh:
+        report = _health_report(wh, date.fromisoformat(since), date.fromisoformat(until), "OPS.QUERY_LOG")
+        result = evaluate_health(report, load_events(wh))
+    table = Table(title="Health engine vs ground truth")
+    for col in ("event", "nature", "kind", "start", "verdict", "cases (severity: headline)"):
+        table.add_column(col)
+    for e in result.events:
+        verdict = "[green]alerted[/]" if e.alerted else "[green]calm[/]" if e.nature == "business" else "[red]missed[/]"
+        if e.nature == "business" and e.alerted:
+            verdict = "[red]false alarm[/]"
+        cases = "\n".join(f"{c.severity.value}: {c.primary.signal.value} {c.primary.table}" for c in e.cases)
+        table.add_row(e.event_id, e.nature, e.kind, str(e.start), verdict, cases or "-")
+    console.print(table)
+    console.print(
+        f"data-incident recall [bold]{result.recall:.0%}[/]   business calm [bold]{result.calm:.0%}[/]   "
+        f"alert precision [bold]{result.precision:.0%}[/] ({len(result.false_alarms)} unmatched alerting cases)"
+    )
+    for c in result.false_alarms:
+        console.print(f"  [yellow]unmatched[/] {c.case_id} {c.severity.value}: {c.primary.summary}")
 
 
 if __name__ == "__main__":
