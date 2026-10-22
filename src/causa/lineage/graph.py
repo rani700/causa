@@ -61,6 +61,9 @@ class Activity:
     def _days(self, since: date | None, until: date | None) -> list[date]:
         return [d for d in self.daily if (since is None or d >= since) and (until is None or d <= until)]
 
+    def days_in_window(self, since: date | None, until: date | None) -> set[date]:
+        return set(self._days(since, until))
+
     def in_window(self, since: date | None, until: date | None) -> int:
         return sum(self.daily[d] for d in self._days(since, until))
 
@@ -85,6 +88,7 @@ class ImpactedActor:
     reads: int  # reads in the window (0 for writers)
     last_read: datetime | None
     writes: tuple[str, ...] = ()  # downstream tables this actor (re)built from affected data
+    active_days: int = 0  # distinct days with reads or writes in the window (editions, runs)
 
 
 @dataclass
@@ -110,6 +114,7 @@ class LineageGraph:
         self.g = nx.DiGraph()
         self.schema_changes: list[SchemaChange] = []
         self.parse_errors: dict[str, str] = {}
+        self.join_pairs: set[tuple[ColumnRef, ColumnRef]] = set()
 
     # -- construction --------------------------------------------------------------------------
 
@@ -124,7 +129,13 @@ class LineageGraph:
     def _actor(self, actor: Actor) -> str:
         if actor.node_id not in self.g:
             self.g.add_node(
-                actor.node_id, type="actor", name=actor.name, kind=actor.kind, tool=actor.tool, key=actor.key
+                actor.node_id,
+                type="actor",
+                name=actor.name,
+                kind=actor.kind,
+                tool=actor.tool,
+                key=actor.key,
+                attributes=dict(actor.attributes),
             )
         return actor.node_id
 
@@ -166,6 +177,7 @@ class LineageGraph:
         for gate in stmt.gating:
             if gate.table != stmt.target:
                 self._edge(self._column(gate), target, EdgeKind.GATES).add(*activity)
+        self.join_pairs |= stmt.join_pairs
 
     # -- queries -------------------------------------------------------------------------------
 
@@ -227,6 +239,25 @@ class LineageGraph:
                 out[name] = gates
         return out
 
+    def derived_columns(self, ref: ColumnRef) -> list[ColumnRef]:
+        """Every column computed (directly or not) from ``ref``, including ``ref`` itself."""
+        start = column_id(ref)
+        if start not in self.g:
+            return [ref]
+        nodes = self._walk(start, lambda n: self._successors(n, EdgeKind.DERIVES))
+        return [ref, *(ColumnRef(self.g.nodes[n]["table"], self.g.nodes[n]["name"]) for n in nodes)]
+
+    def join_partners(self, ref: ColumnRef) -> list[ColumnRef]:
+        """Columns that ``ref`` (or a column derived from it) is equi-joined with downstream."""
+        derived = set(self.derived_columns(ref))
+        out = []
+        for a, b in self.join_pairs:
+            if a in derived and b not in derived:
+                out.append(b)
+            elif b in derived and a not in derived:
+                out.append(a)
+        return sorted(set(out))
+
     def influential_columns(self, table: str) -> tuple[set[str], set[str]]:
         """Columns of ``table`` that matter downstream, as ``(gating, derived)``.
 
@@ -269,6 +300,12 @@ class LineageGraph:
             via = tuple(sorted(set(reads.get(actor_node, []))))
             activities = [self.g.edges[table_id(t), actor_node]["activity"] for t in via]
             last = max((t for a in activities if (t := a.last_in_window(since, until))), default=None)
+            days = {d for a in activities for d in a.days_in_window(since, until)}
+            for target in writes.get(actor_node, []):
+                for source in self._predecessors(table_id(target), EdgeKind.FEEDS):
+                    activity = self.g.edges[source, table_id(target)]["activity"]
+                    if data["key"] in activity.actors:
+                        days |= activity.days_in_window(since, until)
             actors.append(
                 ImpactedActor(
                     actor=data["key"],
@@ -278,6 +315,7 @@ class LineageGraph:
                     reads=sum(a.in_window(since, until) for a in activities),
                     last_read=last,
                     writes=tuple(sorted(set(writes.get(actor_node, [])))),
+                    active_days=len(days),
                 )
             )
         return Impact(origin=table, tables=affected, actors=actors)

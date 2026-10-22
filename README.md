@@ -20,8 +20,8 @@ features break revenue down but assume the data is correct. Causa joins the two.
 | 2. Data health detectors, lineage-focused, grouped into cases | ✅ |
 | 3. Metric attribution (recursive drill-down, Shapley volume/rate split, significance, restatements) | ✅ |
 | 4. Business-vs-data verdict (linkage, mechanism-aware impact estimates, evidence, confidence) | ✅ |
-| 5. Counterfactual replay + recall | ⏳ next |
-| Investigator agent, API, Slack, UI | ⏳ |
+| 5. Counterfactual replay (re-runs the real pipeline on repaired data) + recall with notices | ✅ |
+| Investigator agent, API, Slack, UI | ⏳ next |
 
 ## Quickstart
 
@@ -37,7 +37,8 @@ uv run causa explain net_revenue --current 2026-10-06..2026-10-12
 uv run causa explain net_revenue --current 2026-10-01..2026-10-05     # a churned whale under a normal total
 uv run causa metrics restatements net_revenue --since 2026-05-01 --until 2026-10-17 --dimension REGION
 uv run causa verdict net_revenue --current 2026-10-01..2026-10-07    # data incidents + the real story
-uv run causa eval verdict          # estimated data impact vs the true gap, for every event
+uv run causa eval verdict          # data impact (replayed) vs the true gap, for every event
+uv run causa recall net_revenue --current 2026-10-06..2026-10-12 --out notices.md
 make test
 ```
 
@@ -155,11 +156,36 @@ distinct orders, dimensions, high-cardinality "deep" dimensions such as customer
 - **business remainder**: judged against normal variation and explained again by attribution on
   the days no incident touched (that is where a churned customer surfaces under a broken feed)
 
-`causa eval verdict` compares the estimated data impact with the true gap (reported change minus
-true change) for the week starting at every event. On the default scenario and two unseen seeds:
-30 of 33 windows within 10% of the change or inside the 95% band, median error under 1%, and no
-business event ever claimed as data. The three misses are all partial-NULL row loss, overestimated
-by about 60% because the dropped rows were smaller than average; engine 5's replay addresses this.
+`causa eval verdict` compares the data impact with the true gap (reported change minus true change)
+for the week starting at every event. With estimates alone: 30 of 33 windows within 10% or inside
+the 95% band (the misses: partial-NULL row loss, overestimated ~60% because the dropped rows were
+smaller than average). With engine 5's replay: **33 of 33, worst error 0.8%**, and no business
+event ever claimed as data.
+
+### Engine 5: counterfactual replay and recall (`causa.replay`, `causa.recall`)
+
+What would the metric have shown without the incident? Causa re-runs the company's **own pipeline**:
+
+1. a **repair** is inferred from the health evidence, never configured:
+   - duplicated keys: keep the first load of each inferred key
+   - a column that went NULL right after an `ADD COLUMN`: verified rename, `COALESCE(old, new)`
+   - NULL join keys: kept under an `(unknown)` member of the dimension they join (found from the
+     parsed `ON` conditions), so the value survives and only the category is unknown
+   - a wrong reference value: interpolated between the last good value and the next
+2. the exact INSERT/MERGE statements the query log recorded on the affected load days, for every
+   table between the damage and the metric, are re-run in the `CAUSA_REPLAY` schema with table names
+   rewritten by sqlglot: once on the original data (**control**), once on the repaired data
+3. the control run must reproduce every logged row count (proof the replay is faithful); the metric
+   on repaired minus control is the incident's exact effect
+
+On the simulator the replay matches the true misstatement to the euro for duplicates, NULL keys and
+the renamed column, and within 0.2-0.8% for the interpolated FX rate.
+
+`causa recall` then lists everyone exposed to the wrong numbers: exposure window (until the data
+healed, or *still open* if the warehouse holds the damage), misstatement per day, and every
+dashboard, scheduled report (editions, recipients), ML pipeline, reverse-ETL sync, spreadsheet and
+analyst that read affected data, plus the pipeline that carried the incident and the load days to
+re-run. Each gets a drafted correction notice; `--out notices.md` writes them to a file.
 
 ## Layout
 
@@ -171,6 +197,8 @@ src/causa/
   health/        monitor discovery, profiling SQL, detectors, cases
   metrics/       metric definitions, attribution, narrative, snapshots and restatements
   verdict/       linkage, impact estimators, evidence and verdicts
+  replay/        repair inference and counterfactual replay of the pipeline
+  recall.py      exposure, consumers and correction notices
   store.py       Causa's own tables (CAUSA schema)
   evaluation.py  scoring against the simulator's ground truth
   simulator/     synthetic company, scenario, incidents, workloads

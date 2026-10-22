@@ -47,6 +47,7 @@ class ParsedStatement:
     sources: set[str] = field(default_factory=set)
     derivations: dict[str, set[ColumnRef]] = field(default_factory=dict)  # target column -> source columns
     gating: set[ColumnRef] = field(default_factory=set)
+    join_pairs: set[tuple[ColumnRef, ColumnRef]] = field(default_factory=set)  # equi-join keys, sorted pairs
     reads: set[ColumnRef] = field(default_factory=set)
     external_source: str | None = None
     ddl: str | None = None  # schema change applied to target (ALTER TABLE ...)
@@ -136,6 +137,19 @@ def _analyse_query(
         for source in scope.sources.values():
             if isinstance(source, exp.Table) and table_name(source) != stmt.target:
                 stmt.sources.add(table_name(source))
+        for join in scope.expression.args.get("joins") or []:
+            for eq in (join.args.get("on") or exp.true()).find_all(exp.EQ):
+                left, right = eq.this, eq.expression
+                if isinstance(left, exp.Column) and isinstance(right, exp.Column):
+                    a, b = scope.sources.get(left.table), scope.sources.get(right.table)
+                    if isinstance(a, exp.Table) and isinstance(b, exp.Table):
+                        pair = sorted(
+                            (
+                                ColumnRef(table_name(a), left.name.upper()),
+                                ColumnRef(table_name(b), right.name.upper()),
+                            )
+                        )
+                        stmt.join_pairs.add((pair[0], pair[1]))
         for column in scope.columns:
             source = scope.sources.get(column.table)
             if not isinstance(source, exp.Table):

@@ -85,6 +85,9 @@ class DataFinding:
     evidence: list[Evidence]
     overlaps: list[DriverOverlap] = field(default_factory=list)
     duplicate_of: str | None = None  # same rows on the same days as another finding: not counted twice
+    replaced: ImpactEstimate | None = None  # the estimate a counterfactual replay superseded
+    replay_note: str | None = None  # why no replay was done, when one was attempted
+    replay: object | None = None  # the ReplayResult behind the estimate, when there is one
 
     @property
     def score(self) -> float:
@@ -133,7 +136,9 @@ class Investigator:
         graph: LineageGraph,
         query_log: pl.DataFrame,
         health: HealthReport | None = None,
+        replay: bool = False,
     ) -> None:
+        self._replay = replay
         self._wh = wh
         self._catalog = catalog
         self._graph = graph
@@ -177,6 +182,8 @@ class Investigator:
             findings.append(finding)
 
         _mark_duplicates(findings)
+        if self._replay:
+            self._replay_findings(metric, current, baseline, report, findings)
         excluded = sorted({d for f in findings if f.is_data for d in f.business_days})
         business = None
         if excluded:
@@ -245,6 +252,41 @@ class Investigator:
             if estimate is not None:
                 return estimate, statistical
         return statistical, None
+
+    def _replay_findings(
+        self,
+        metric: MetricDefinition,
+        current: Period,
+        baseline: Period,
+        report: HealthReport,
+        findings: list[DataFinding],
+    ) -> None:
+        """Supersedes estimates with the exact effect from re-running the pipeline on repaired data."""
+        from causa.replay import Replayer  # replay builds on verdict; imported late to avoid a cycle
+
+        replayer = Replayer(self._wh, self._catalog, self._graph, self._log, report)
+        for f in findings:
+            if not f.is_data or f.duplicate_of or f.estimate.method == HEALED:
+                continue
+            plan = replayer.plan(f.case, metric)
+            if isinstance(plan, str):
+                f.replay_note = plan
+                continue
+            result = replayer.run(plan, metric)
+            if not result.faithful:
+                f.replay_note = "control replay did not reproduce the logged row counts; estimate kept"
+                continue
+            f.replaced = f.estimate
+            f.replay = result
+            f.estimate = ImpactEstimate(
+                f.estimate.subset,
+                f"counterfactual replay: {plan.repair.description}; re-ran {plan.statements.height} pipeline "
+                f"statements on {', '.join(plan.path)}, the control run reproduced every logged row count",
+                f.estimate.current_days,
+                f.estimate.baseline_days,
+                result.impact(current, baseline),
+                subset_share=f.estimate.subset_share,
+            )
 
     def _row_loss(
         self,

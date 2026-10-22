@@ -35,6 +35,10 @@ def finding_lines(f: DataFinding, v: Verdict) -> list[str]:
     lines.append(f"    on {' and '.join(when) or 'no compared day'}")
     band = f" (95% band {money(e.low, unit)} .. {money(e.high, unit)})" if e.sd else ""
     lines.append(f"    impact {money(e.impact, unit)}{band}: {e.method}")
+    if f.replaced is not None:
+        lines.append(f"    earlier estimate: {money(f.replaced.impact, unit)} ({f.replaced.method})")
+    if f.replay_note:
+        lines.append(f"    not replayed: {f.replay_note}")
     if f.check is not None:
         c = f.check
         band = f" ± {money(2 * c.sd, unit).lstrip('+')}" if c.sd else ""

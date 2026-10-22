@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from datetime import date, datetime, timedelta
 from datetime import time as dtime
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -19,6 +20,7 @@ from causa.metrics.attribution import Attributor, Period
 from causa.metrics.definitions import load_config
 from causa.metrics.narrative import money, render
 from causa.metrics.snapshots import TOTAL, MetricObserver, restatements
+from causa.recall import recall as build_recall
 from causa.simulator.runner import run_simulation
 from causa.simulator.scenario import default_scenario
 from causa.sources.catalog import Catalog
@@ -223,6 +225,7 @@ def verdict(
     baseline: Annotated[
         str | None, typer.Option(help="Comparison period (default: same weekdays one week earlier).")
     ] = None,
+    replay: Annotated[bool, typer.Option(help="Re-run the pipeline on repaired data for exact impacts.")] = True,
     query_log: QueryLogOption = "OPS.QUERY_LOG",
     config: ConfigOption = "causa.yaml",
 ) -> None:
@@ -233,11 +236,60 @@ def verdict(
         catalog = Catalog.load(wh)
         graph = build_lineage(log_frame, catalog)
         with console.status("Investigating"):
-            result = Investigator(wh, catalog, graph, log_frame).verdict(
+            result = Investigator(wh, catalog, graph, log_frame, replay=replay).verdict(
                 definition, Period.parse(current), Period.parse(baseline) if baseline else None
             )
     for line in render_verdict(result):
         console.print(line, highlight=False, soft_wrap=True)
+
+
+@app.command()
+def recall(
+    metric: str,
+    current: Annotated[str, typer.Option(help="Period whose data incidents to recall, e.g. 2026-10-06..2026-10-12.")],
+    out: Annotated[str | None, typer.Option(help="Also write the correction notices to this Markdown file.")] = None,
+    query_log: QueryLogOption = "OPS.QUERY_LOG",
+    config: ConfigOption = "causa.yaml",
+) -> None:
+    """Who consumed the wrong numbers, how wrong they were, and a correction notice for each."""
+    definition = load_config(config).metric(metric)
+    with connect() as wh:
+        log_frame = _query_log(wh, query_log).fetch()
+        catalog = Catalog.load(wh)
+        graph = build_lineage(log_frame, catalog)
+        today = log_frame["start_time"].max().date()  # type: ignore[union-attr]
+        with console.status("Investigating and replaying"):
+            result = Investigator(wh, catalog, graph, log_frame, replay=True).verdict(definition, Period.parse(current))
+    recalls = build_recall(result, graph, today)
+    if not recalls:
+        console.print("No data incidents in this period: nothing to recall.")
+        return
+    markdown = []
+    for r in recalls:
+        status = f"healed {r.exposure_end}" if r.exposure_end else "[red]still wrong in the warehouse[/]"
+        console.print(
+            f"\n[bold]{r.finding.case.case_id}[/] origin {r.origin}; exposure {r.exposure_start} -> "
+            f"{r.exposure_end or today} ({status}); {definition.label} misstated by "
+            f"{money(r.total_misstatement, definition.unit)} over {len(r.misstatement)} day(s)"
+        )
+        table = Table()
+        for col in ("kind", "consumer", "reads", "days", "last read", "via / rebuilt"):
+            table.add_column(col)
+        for item in r.items:
+            a = item.actor
+            last = f"{a.last_read:%Y-%m-%d %H:%M}" if a.last_read else ""
+            table.add_row(a.kind.value, a.name, str(a.reads), str(a.active_days), last, ", ".join(a.via or a.writes))
+        console.print(table)
+        markdown.append(f"## {r.finding.case.case_id}: {r.finding.case.primary.summary}\n")
+        markdown += [f"- **{i.actor.name}** ({i.actor.kind.value}): {i.notice}" for i in r.items]
+        markdown.append("")
+    if out:
+        Path(out).write_text("# Correction notices\n\n" + "\n".join(markdown))
+        console.print(f"\nNotices written to {out}")
+    else:
+        console.print("\n[bold]Draft notices[/]")
+        for line in markdown:
+            console.print(line, highlight=False, soft_wrap=True)
 
 
 @metrics_app.command("restatements")
@@ -296,7 +348,10 @@ def eval_health(
 
 
 @eval_app.command("verdict")
-def eval_verdict(config: ConfigOption = "causa.yaml") -> None:
+def eval_verdict(
+    replay: Annotated[bool, typer.Option(help="Use counterfactual replay where possible.")] = True,
+    config: ConfigOption = "causa.yaml",
+) -> None:
     """Does the estimated data impact match what data problems really did to net revenue?"""
     definition = load_config(config).metric("net_revenue")
     results = []
@@ -312,7 +367,7 @@ def eval_verdict(config: ConfigOption = "causa.yaml") -> None:
                 last + timedelta(days=10),
                 log_frame,  # type: ignore[operator]
             )
-        investigator = Investigator(wh, catalog, graph, log_frame, report)
+        investigator = Investigator(wh, catalog, graph, log_frame, report, replay=replay)
         for ev in events.iter_rows(named=True):
             current = Period(ev["start_date"], ev["start_date"] + timedelta(days=6))
             baseline = current.same_weekdays_before()
