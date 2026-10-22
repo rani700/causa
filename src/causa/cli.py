@@ -28,6 +28,7 @@ from causa.sources.query_log import ExasolAuditLog, QueryLogSource, TableQueryLo
 from causa.verdict import Investigator
 from causa.verdict.narrative import render as render_verdict
 from causa.warehouse import Warehouse, connect
+from causa.workspace import Workspace
 
 app = typer.Typer(no_args_is_help=True, help="Causa: root-cause engine for business metrics.")
 sim_app = typer.Typer(no_args_is_help=True, help="Synthetic company simulator (benchmark + demo data).")
@@ -290,6 +291,77 @@ def recall(
         console.print("\n[bold]Draft notices[/]")
         for line in markdown:
             console.print(line, highlight=False, soft_wrap=True)
+
+
+@app.command()
+def ask(
+    question: Annotated[str | None, typer.Argument(help="A question; omit for an interactive session.")] = None,
+    show_tools: Annotated[bool, typer.Option(help="Print every tool call the agent makes.")] = True,
+    effort: Annotated[str, typer.Option(help="Reasoning effort: low, medium, high, xhigh, max.")] = "high",
+    query_log: QueryLogOption = "OPS.QUERY_LOG",
+    config: ConfigOption = "causa.yaml",
+) -> None:
+    """Ask the investigator agent (needs ANTHROPIC_API_KEY). Figures come from Causa's engines."""
+    from causa.agent import InvestigatorAgent, Toolbox
+
+    with connect() as wh:
+        agent = InvestigatorAgent(Toolbox(Workspace(wh, config, query_log)), effort=effort)
+        prompts = iter([question]) if question else iter(lambda: console.input("[bold]ask> [/]"), None)
+        for q in prompts:
+            if q.strip() in {"", "exit", "quit"}:
+                break
+            with console.status("Investigating"):
+                answer = agent.ask(q)
+            if show_tools:
+                for call in answer.tool_calls:
+                    args = ", ".join(f"{k}={v!r}" for k, v in call.input.items() if v is not None)
+                    flag = " [red]error[/]" if call.error else ""
+                    console.print(f"[dim]  {call.name}({args}) {call.seconds:.1f}s{flag}[/]")
+            console.print(answer.text, highlight=False, soft_wrap=True)
+            console.print(
+                f"[dim]{answer.model}: {answer.input_tokens:,} in ({answer.cache_read_tokens:,} cached), "
+                f"{answer.output_tokens:,} out[/]"
+            )
+
+
+@app.command()
+def brief(
+    metric: str,
+    day: Annotated[str | None, typer.Option(help="Morning of this day (ISO); default: latest day in the log.")] = None,
+    post: Annotated[bool, typer.Option(help="Post to Slack via CAUSA_SLACK_WEBHOOK_URL.")] = False,
+    query_log: QueryLogOption = "OPS.QUERY_LOG",
+    config: ConfigOption = "causa.yaml",
+) -> None:
+    """The morning brief: last 7 days, data vs business, who saw wrong numbers, new incidents."""
+    from causa import slack
+    from causa.brief import morning_brief, to_slack, to_text
+    from causa.config import get_settings
+
+    with connect() as wh, console.status("Preparing the brief"):
+        b = morning_brief(Workspace(wh, config, query_log), metric, date.fromisoformat(day) if day else None)
+    console.print(to_text(b), highlight=False, soft_wrap=True)
+    if post:
+        url = get_settings().slack_webhook_url
+        if url is None:
+            raise typer.BadParameter("set CAUSA_SLACK_WEBHOOK_URL to post to Slack")
+        status = slack.post(url.get_secret_value(), to_slack(b))
+        console.print(f"[dim]posted to Slack (HTTP {status})[/]")
+
+
+@app.command()
+def serve(
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    query_log: QueryLogOption = "OPS.QUERY_LOG",
+    config: ConfigOption = "causa.yaml",
+) -> None:
+    """Serve the engines and the agent over HTTP (FastAPI; docs at /docs)."""
+    import uvicorn
+
+    from causa.api import create_app
+
+    wh = connect()
+    uvicorn.run(create_app(Workspace(wh, config, query_log)), host=host, port=port)
 
 
 @metrics_app.command("restatements")

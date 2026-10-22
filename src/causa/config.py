@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     # The docker-db image ships a self-signed certificate; never enable this against a real cluster.
     exasol_tls_insecure: bool = False
 
+    slack_webhook_url: SecretStr | None = None
+
 
 @lru_cache
 def get_settings() -> Settings:

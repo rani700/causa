@@ -21,7 +21,8 @@ features break revenue down but assume the data is correct. Causa joins the two.
 | 3. Metric attribution (recursive drill-down, Shapley volume/rate split, significance, restatements) | ✅ |
 | 4. Business-vs-data verdict (linkage, mechanism-aware impact estimates, evidence, confidence) | ✅ |
 | 5. Counterfactual replay (re-runs the real pipeline on repaired data) + recall with notices | ✅ |
-| Investigator agent, API, Slack, UI | ⏳ next |
+| Investigator agent (Claude + engine tools), morning brief, Slack, HTTP API | ✅ |
+| Web UI, validation on Exasol SaaS, cost per decision | ⏳ next |
 
 ## Quickstart
 
@@ -39,6 +40,9 @@ uv run causa metrics restatements net_revenue --since 2026-05-01 --until 2026-10
 uv run causa verdict net_revenue --current 2026-10-01..2026-10-07    # data incidents + the real story
 uv run causa eval verdict          # data impact (replayed) vs the true gap, for every event
 uv run causa recall net_revenue --current 2026-10-06..2026-10-12 --out notices.md
+uv run causa brief net_revenue --day 2026-10-08          # add --post with CAUSA_SLACK_WEBHOOK_URL set
+ANTHROPIC_API_KEY=... uv run causa ask "Why did revenue drop last week? Is it real?"
+uv run causa serve                 # HTTP API, docs at http://127.0.0.1:8000/docs
 make test
 ```
 
@@ -187,6 +191,32 @@ dashboard, scheduled report (editions, recipients), ML pipeline, reverse-ETL syn
 analyst that read affected data, plus the pipeline that carried the incident and the load days to
 re-run. Each gets a drafted correction notice; `--out notices.md` writes them to a file.
 
+### The investigator agent, the brief and the API
+
+`causa ask` puts Claude (`claude-opus-5-5`, adaptive thinking, high effort) in front of the engines.
+Claude plans the investigation; **every figure comes from a tool**:
+
+| Tool | Engine |
+|---|---|
+| `judge_change` | verdict: data incidents (replayed) vs business change, evidence, restatements |
+| `explain_metric` | attribution drill-down with volume/rate split and significance |
+| `health_cases` | data health cases in a date range |
+| `recall_consumers` | exposure, misstatement per day, consumers and draft notices |
+| `lineage` | upstream/downstream, loaders, row-gating columns, schema changes |
+| `run_sql` | one read-only SELECT (parsed by sqlglot; rows capped; ground-truth schema refused) |
+
+Tools are strict JSON schemas; system prompt and tools are prompt-cached; the conversation is
+append-only; refusals fall back server-side (`fallbacks: "default"`); every tool call is recorded and
+shown, so each answer has an audit trail. The loop is tested against a scripted client.
+
+`causa brief` is the morning message. It is **deterministic** (no language model): last 7 days vs the
+same weekdays before, the data/business split, each incident with its replayed impact and where it
+was seen, the real business movement on unaffected days, and new incidents since yesterday. It renders
+as text or Slack Block Kit and posts only with `--post` and a configured `CAUSA_SLACK_WEBHOOK_URL`.
+
+`causa serve` exposes the same through FastAPI: `/metrics`, `/metrics/{m}/explain|verdict|recall|brief`,
+`/health/cases`, `/lineage/{table}` and `POST /ask` (multi-turn by `conversation_id`).
+
 ## Layout
 
 ```
@@ -199,6 +229,9 @@ src/causa/
   verdict/       linkage, impact estimators, evidence and verdicts
   replay/        repair inference and counterfactual replay of the pipeline
   recall.py      exposure, consumers and correction notices
+  agent/         investigator agent (Claude tool-use loop) and its engine-backed tools
+  brief.py       deterministic morning brief (text and Slack Block Kit); slack.py posts it
+  api.py         FastAPI service; workspace.py caches what the engines share
   store.py       Causa's own tables (CAUSA schema)
   evaluation.py  scoring against the simulator's ground truth
   simulator/     synthetic company, scenario, incidents, workloads
