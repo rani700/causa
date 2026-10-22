@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import time
-from datetime import date
+from datetime import date, datetime, timedelta
+from datetime import time as dtime
 from typing import Annotated
 
 import typer
@@ -14,6 +15,10 @@ from rich.table import Table
 from causa.evaluation import evaluate_health, load_events
 from causa.health import HealthReport, HealthScanner, Severity
 from causa.lineage import LineageGraph, build_lineage
+from causa.metrics.attribution import Attributor, Period
+from causa.metrics.definitions import load_config
+from causa.metrics.narrative import money, render
+from causa.metrics.snapshots import TOTAL, MetricObserver, restatements
 from causa.simulator.runner import run_simulation
 from causa.simulator.scenario import default_scenario
 from causa.sources.catalog import Catalog
@@ -24,12 +29,15 @@ app = typer.Typer(no_args_is_help=True, help="Causa: root-cause engine for busin
 sim_app = typer.Typer(no_args_is_help=True, help="Synthetic company simulator (benchmark + demo data).")
 lineage_app = typer.Typer(no_args_is_help=True, help="Lineage reconstructed from the query log.")
 health_app = typer.Typer(no_args_is_help=True, help="Data health incidents, focused by lineage.")
+metrics_app = typer.Typer(no_args_is_help=True, help="Metric history: snapshots and restatements.")
 eval_app = typer.Typer(no_args_is_help=True, help="Score Causa against the simulator's ground truth.")
 app.add_typer(sim_app, name="sim")
 app.add_typer(lineage_app, name="lineage")
 app.add_typer(health_app, name="health")
 app.add_typer(eval_app, name="eval")
+app.add_typer(metrics_app, name="metrics")
 console = Console()
+ConfigOption = Annotated[str, typer.Option(help="Causa configuration file (metric definitions).")]
 
 
 @sim_app.command("scenario")
@@ -55,13 +63,27 @@ def run(
     start: Annotated[str, typer.Option(help="First simulated day (ISO date).")] = "2026-05-04",
     days: int = 168,
     seed: int = 7,
+    observe: Annotated[bool, typer.Option(help="Record nightly metric snapshots, as Causa would.")] = True,
+    config: ConfigOption = "causa.yaml",
 ) -> None:
     """Build the simulated company's warehouse (drops and recreates its schemas)."""
     scenario = default_scenario(date.fromisoformat(start), days, seed)
     t0 = time.perf_counter()
     with connect(client_name="causa-simulator") as wh, Progress(console=console) as progress:
+        observer = None
+        if observe:
+            observer = MetricObserver(wh, load_config(config).metrics)
+            observer.reset()
         task = progress.add_task(f"Simulating on {wh.name}", total=scenario.days)
-        result = run_simulation(scenario, wh, on_day=lambda _: progress.advance(task))
+        result = run_simulation(
+            scenario,
+            wh,
+            on_day=lambda _: progress.advance(task),
+            # Causa's nightly snapshot, taken after the ETL and before the business reads the numbers.
+            on_loaded=(lambda d: observer.observe(datetime.combine(d + timedelta(days=1), dtime(3, 30)), d))
+            if observer
+            else None,
+        )
 
     gap = result.reported_net_revenue - result.true_net_revenue
     console.print(
@@ -168,6 +190,56 @@ def health_scan(
             if i is not case.primary:
                 console.print(f"  [dim]+ {i.signal.value}: {i.summary}[/]")
         console.print(f"  [dim]tables: {', '.join(case.tables)}[/]\n")
+
+
+@app.command()
+def explain(
+    metric: str,
+    current: Annotated[str, typer.Option(help="Period to explain, e.g. 2026-10-06..2026-10-12.")],
+    baseline: Annotated[
+        str | None, typer.Option(help="Comparison period (default: same weekdays one week earlier).")
+    ] = None,
+    where: Annotated[list[str] | None, typer.Option(help="Restrict to DIMENSION=VALUE (repeatable).")] = None,
+    config: ConfigOption = "causa.yaml",
+) -> None:
+    """Explain why METRIC changed: drivers, volume vs rate, and whether the change is unusual."""
+    definition = load_config(config).metric(metric)
+    filters = tuple((k.upper(), v) for k, _, v in (w.partition("=") for w in where or []))
+    with connect() as wh, console.status("Drilling down"):
+        explanation = Attributor(wh).explain(
+            definition, Period.parse(current), Period.parse(baseline) if baseline else None, filters
+        )
+    for line in render(explanation):
+        console.print(line, highlight=False)
+    console.print(f"[dim]{explanation.queries} queries pushed down to the warehouse[/]")
+
+
+@metrics_app.command("restatements")
+def show_restatements(
+    metric: str,
+    since: Annotated[str, typer.Option(help="First metric date (ISO).")],
+    until: Annotated[str, typer.Option(help="Last metric date (ISO).")],
+    dimension: Annotated[str, typer.Option(help="Dimension to check, or '*' for the total.")] = TOTAL,
+    config: ConfigOption = "causa.yaml",
+) -> None:
+    """Days whose numbers changed after they were first reported (late data, re-runs, backfills)."""
+    definition = load_config(config).metric(metric)
+    with connect() as wh:
+        found = restatements(wh, definition, date.fromisoformat(since), date.fromisoformat(until), dimension.upper())
+    table = Table(title=f"Restatements of {definition.label}")
+    for col in ("date", "segment", "first reported", "at", "now", "change"):
+        table.add_column(col)
+    for r in found:
+        segment = "total" if r.dim_value == TOTAL else f"{r.dimension}={r.dim_value}"
+        table.add_row(
+            str(r.metric_date),
+            segment,
+            money(r.first_reported, definition.unit).lstrip("+"),
+            f"{r.first_observed_at:%Y-%m-%d %H:%M}",
+            money(r.latest, definition.unit).lstrip("+"),
+            money(r.change, definition.unit),
+        )
+    console.print(table if found else "No restatements.")
 
 
 @eval_app.command("health")

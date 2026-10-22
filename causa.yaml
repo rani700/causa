@@ -1,0 +1,23 @@
+# Metrics Causa monitors and explains. SQL identifiers use the Exasol dialect.
+metrics:
+  - name: net_revenue
+    label: Net revenue
+    unit: EUR
+    table: MART.FCT_ORDER_LINES
+    time_column: ORDER_DATE
+    measure_column: NET_REVENUE_EUR
+    volume_column: ORDER_ID
+    volume_aggregation: count_distinct
+    volume_label: orders
+    dimensions: [REGION, COUNTRY, SEGMENT, CHANNEL, CATEGORY]
+    deep_dimensions: [CUSTOMER_NAME]
+
+  - name: units_sold
+    label: Units sold
+    table: MART.FCT_ORDER_LINES
+    time_column: ORDER_DATE
+    measure_column: QUANTITY
+    volume_column: ORDER_ID
+    volume_label: orders
+    dimensions: [REGION, COUNTRY, SEGMENT, CHANNEL, CATEGORY]
+    deep_dimensions: [CUSTOMER_NAME]

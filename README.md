@@ -18,8 +18,8 @@ features break revenue down but assume the data is correct. Causa joins the two.
 | Synthetic company simulator (benchmark with ground truth) | ✅ |
 | 1. Lineage from the query log (column-level + row-gating predicates + blast radius) | ✅ |
 | 2. Data health detectors, lineage-focused, grouped into cases | ✅ |
-| 3. Metric attribution (Shapley / Adtributor-style decomposition, pushed down to Exasol) | ⏳ next |
-| 4. Business-vs-data classifier | ⏳ |
+| 3. Metric attribution (recursive drill-down, Shapley volume/rate split, significance, restatements) | ✅ |
+| 4. Business-vs-data classifier | ⏳ next |
 | 5. Counterfactual replay + recall | ⏳ |
 | Investigator agent, API, Slack, UI | ⏳ |
 
@@ -28,11 +28,14 @@ features break revenue down but assume the data is correct. Causa joins the two.
 ```bash
 uv sync
 uv run causa sim scenario          # the business events and data incidents that will be injected
-uv run causa sim run               # build 168 days of a simulated company's warehouse (~70s on DuckDB)
+uv run causa sim run               # 168 days of a simulated company, with nightly metric snapshots (~70s)
 uv run causa lineage trace RPT.V_EXEC_REVENUE_DAILY --column NET_REVENUE_EUR
 uv run causa lineage impact RAW.SHOP_ORDERS --since 2026-10-06 --until 2026-10-12
 uv run causa health scan --since 2026-05-25 --until 2026-10-17
 uv run causa eval health           # score the health engine against ground truth
+uv run causa explain net_revenue --current 2026-10-06..2026-10-12
+uv run causa explain net_revenue --current 2026-10-01..2026-10-05     # a churned whale under a normal total
+uv run causa metrics restatements net_revenue --since 2026-05-01 --until 2026-10-17 --dimension REGION
 make test
 ```
 
@@ -103,6 +106,28 @@ incidents, 100% calm on business changes (none raised above medium) and 100% ale
 The simulator is the benchmark, so these numbers say the engine works on these incident types,
 not that it will on every warehouse.
 
+### Engine 3: why a metric moved (`causa.metrics`)
+
+Metrics are declared in `causa.yaml` (table, time column, summed measure, optional volume such as
+distinct orders, dimensions, high-cardinality "deep" dimensions such as customer).
+
+- **recursive drill-down, pushed down**: one `GROUPING SETS` query per level returns current and
+  baseline values for every element of every dimension; Causa drills into each driver with a new
+  query (region -> country -> customer). A whole explanation is typically 3-8 queries.
+- **choosing the dimension** (after Adtributor): elements must carry at least 10% of the change and
+  be *over-represented* (lift >= 1.3 vs their baseline share), so big segments do not "explain" a
+  change merely by being big; dimensions are ranked by excess explanation, so a single customer
+  that fully explains a change beats its country and region
+- **volume vs rate**: each driver's change is split exactly (two-player Shapley value) into a
+  volume effect and a value-per-unit effect. Lost rows are pure volume; a wrong FX rate is pure rate.
+- **uniform vs concentrated**: a broad segment whose every part moved by the same percentage is
+  flagged as uniform (how lost data looks); a vanished segment is reported as "stopped entirely"
+- **significance**: the change is compared with the same comparison over the previous ten windows
+  (robust z), and the default baseline covers the same weekdays a week earlier
+- **snapshots and restatements**: Causa records what every metric *showed* each night, so values
+  that changed after they were reported (late batches, failed loads that were re-run) stay visible
+  even after the warehouse has silently healed
+
 ## Layout
 
 ```
@@ -111,6 +136,8 @@ src/causa/
   sources/       query-log sources (Exasol audit log, table) and the catalog
   lineage/       statement parser, actor identification, lineage graph
   health/        monitor discovery, profiling SQL, detectors, cases
+  metrics/       metric definitions, attribution, narrative, snapshots and restatements
+  store.py       Causa's own tables (CAUSA schema)
   evaluation.py  scoring against the simulator's ground truth
   simulator/     synthetic company, scenario, incidents, workloads
   cli.py

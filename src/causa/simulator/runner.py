@@ -213,7 +213,10 @@ def run_simulation(
     scenario: Scenario,
     wh: Warehouse,
     on_day: Callable[[date], None] | None = None,
+    on_loaded: Callable[[date], None] | None = None,
 ) -> SimulationResult:
+    """``on_loaded(day)`` runs right after the nightly ETL for ``day`` (before anyone reads the data);
+    ``on_day(day)`` runs once the following business day is over."""
     gen = CompanyGenerator(scenario)
     rec = QueryRecorder()
     pipe = _Pipeline(wh, gen, rec)
@@ -234,6 +237,8 @@ def run_simulation(
         night = day + timedelta(days=1)
         pipe.ingest(night)
         pipe.transform(day, failures)
+        if on_loaded:
+            on_loaded(day)
 
         jobs = workloads.day_jobs(night)
         if night in recoveries:

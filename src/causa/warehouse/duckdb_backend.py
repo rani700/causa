@@ -19,9 +19,13 @@ class DuckDBWarehouse(Warehouse):
     name = "duckdb"
 
     def __init__(self, path: Path | str = ":memory:") -> None:
+        self._con = duckdb.connect(":memory:")
         if str(path) != ":memory:":
+            # Attached under a fixed name: DuckDB would otherwise name the catalog after the file,
+            # and a file called causa.duckdb would collide with Causa's own CAUSA schema.
             Path(path).parent.mkdir(parents=True, exist_ok=True)
-        self._con = duckdb.connect(str(path))
+            self._con.execute(f"ATTACH '{Path(path).as_posix()}' AS warehouse")
+            self._con.execute("USE warehouse")
 
     def execute(self, sql: str) -> int:
         rows = self._con.execute(exasol_to_duckdb(sql)).fetchall()
@@ -48,7 +52,8 @@ class DuckDBWarehouse(Warehouse):
             """SELECT UPPER(table_schema) AS table_schema, UPPER(table_name) AS table_name,
                       UPPER(column_name) AS column_name, ordinal_position, UPPER(data_type) AS data_type
                FROM information_schema.columns
-               WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
+               WHERE table_catalog = current_database()
+                 AND table_schema NOT IN ('information_schema', 'pg_catalog')
                ORDER BY 1, 2, 4"""
         ).pl()
         return lower_columns(df)
