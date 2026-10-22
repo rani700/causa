@@ -89,6 +89,23 @@ def test_unparseable_sql_is_reported_not_raised(catalog: Catalog) -> None:
 
 
 @pytest.mark.parametrize(
+    ("statement", "target", "ddl"),
+    [
+        # Seen in Exasol's audit log of a SaaS cluster: none of these may break lineage.
+        ("DROP SCHEMA IF EXISTS RAW CASCADE", None, None),
+        ("CREATE SCHEMA IF NOT EXISTS CAUSA", None, None),
+        ("CREATE USER exa_monitoring_user IDENTIFIED BY '<SECRET>'", None, None),
+        ('GRANT "dba" TO "analyst"', None, None),
+        ("DROP TABLE IF EXISTS STG.ORDERS", "STG.ORDERS", "DROP"),
+        ("DROP VIEW RPT.V_REVENUE", "RPT.V_REVENUE", "DROP"),
+    ],
+)
+def test_production_log_statements(catalog: Catalog, statement: str, target: str | None, ddl: str | None) -> None:
+    parsed = parse_statement(statement, catalog)
+    assert (parsed.target, parsed.ddl, parsed.error) == (target, ddl, None)
+
+
+@pytest.mark.parametrize(
     ("client", "kind", "name"),
     [
         ("Tableau Server 2025.1; workbook=Executive Revenue", ActorKind.DASHBOARD, "Executive Revenue"),

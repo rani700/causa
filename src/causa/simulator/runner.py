@@ -80,7 +80,7 @@ class _Pipeline:
                 "target_table": target,
                 "started_at": started,
                 "finished_at": finished,
-                "state": state,
+                "run_state": state,
                 "rows_affected": rows,
                 "error_message": error,
             }
@@ -265,7 +265,7 @@ def run_simulation(
         reported_net_revenue=float(reported or 0.0),  # type: ignore[arg-type]
         query_log_rows=query_log.height,
         pipeline_runs=runs.height,
-        failed_tasks=[str(r["run_id"]) for r in pipe.runs if r["state"] == "failed"],
+        failed_tasks=[str(r["run_id"]) for r in pipe.runs if r["run_state"] == "failed"],
     )
 
 

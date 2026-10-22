@@ -48,7 +48,7 @@ def test_schema_drift_silently_drops_only_the_drifted_feed(simulate: Simulate) -
     assert gap_by_date(wh, "REGION <> 'EMEA'").is_empty()
     # Rows still landed (with the new column) and the connector reported success.
     assert wh.scalar("SELECT COUNT(*) FROM RAW.SHOP_ORDERS WHERE ORDER_TS IS NULL AND ORDER_TS_UTC IS NOT NULL") > 0
-    assert wh.scalar("SELECT COUNT(*) FROM OPS.PIPELINE_RUNS WHERE STATE <> 'success'") == 0
+    assert wh.scalar("SELECT COUNT(*) FROM OPS.PIPELINE_RUNS WHERE RUN_STATE <> 'success'") == 0
     assert wh.scalar("SELECT COUNT(*) FROM OPS.QUERY_LOG WHERE COMMAND_NAME = 'ALTER TABLE'") == 1
 
 

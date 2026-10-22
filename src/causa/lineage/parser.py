@@ -22,6 +22,8 @@ from causa.sources.catalog import Catalog
 from causa.sqlutil import command_name
 
 log = logging.getLogger(__name__)
+# A production log is full of statements sqlglot models only as opaque commands (users, grants, ...).
+logging.getLogger("sqlglot").setLevel(logging.ERROR)
 DIALECT = "exasol"
 
 _IMPORT = re.compile(
@@ -64,6 +66,9 @@ def table_name(table: exp.Table) -> str:
 
 
 def parse_statement(sql: str, catalog: Catalog) -> ParsedStatement:
+    """Parse one logged statement. Never raises: a production log holds statements of every kind
+    (sessions, grants, schema DDL, client tools' metadata probes), and one odd statement must not
+    stop lineage for the rest."""
     command = command_name(sql)
     if command == "IMPORT":
         return _parse_import(sql)
@@ -71,6 +76,24 @@ def parse_statement(sql: str, catalog: Catalog) -> ParsedStatement:
         tree = sqlglot.parse_one(sql, read=DIALECT)
     except SqlglotError as exc:
         return ParsedStatement(command, error=f"parse: {exc}"[:500])
+    try:
+        return _parse_tree(command, tree, catalog)
+    except Exception as exc:  # see docstring
+        return ParsedStatement(command, error=f"analyse: {type(exc).__name__}: {exc}"[:500])
+
+
+def _is_relation(tree: exp.Expression) -> bool:
+    """CREATE/DROP/ALTER of a table or view (not of a schema, user, role, function, ...)."""
+    kind = (tree.args.get("kind") or "TABLE").upper()
+    return kind in ("TABLE", "VIEW") and isinstance(_relation(tree), exp.Table | exp.Schema)
+
+
+def _relation(tree: exp.Expression) -> exp.Expression | None:
+    tables = tree.args.get("tables")  # DROP keeps its object list here
+    return tables[0] if tables else tree.this
+
+
+def _parse_tree(command: str, tree: exp.Expression, catalog: Catalog) -> ParsedStatement:
 
     stmt = ParsedStatement(command)
     select: exp.Expression | None = None
@@ -85,18 +108,18 @@ def parse_statement(sql: str, catalog: Catalog) -> ParsedStatement:
             stmt.target, stmt.target_kind = table_name(target), "table"
             target_columns = target_columns or catalog.columns(stmt.target) or None
             select = tree.expression
-        case exp.Create():
+        case exp.Create() if _is_relation(tree):
             kind = (tree.args.get("kind") or "TABLE").upper()
             target = tree.this.this if isinstance(tree.this, exp.Schema) else tree.this
             stmt.target, stmt.target_kind = table_name(target), "view" if kind == "VIEW" else "table"
             select = tree.expression
-        case exp.Alter():
+        case exp.Alter() if _is_relation(tree):
             stmt.target, stmt.target_kind = table_name(tree.this), "table"
             stmt.ddl = tree.sql(dialect=DIALECT)
         case exp.TruncateTable():
             stmt.target, stmt.target_kind = table_name(tree.expressions[0]), "table"
-        case exp.Drop():
-            stmt.target, stmt.ddl = table_name(tree.this), "DROP"
+        case exp.Drop() if _is_relation(tree):
+            stmt.target, stmt.ddl = table_name(_relation(tree)), "DROP"
         case exp.Delete() | exp.Update() | exp.Merge():
             stmt.target, stmt.target_kind = table_name(tree.this), "table"
             select = tree

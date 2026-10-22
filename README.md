@@ -22,7 +22,8 @@ features break revenue down but assume the data is correct. Causa joins the two.
 | 4. Business-vs-data verdict (linkage, mechanism-aware impact estimates, evidence, confidence) | ✅ |
 | 5. Counterfactual replay (re-runs the real pipeline on repaired data) + recall with notices | ✅ |
 | Investigator agent (Claude + engine tools), morning brief, Slack, HTTP API | ✅ |
-| Web UI, validation on Exasol SaaS, cost per decision | ⏳ next |
+| Validated end to end on Exasol SaaS (2025.1) | ✅ |
+| Web UI, cost per decision | ⏳ next |
 
 ## Quickstart
 
@@ -48,12 +49,31 @@ make test
 
 ### Running against Exasol
 
+Exasol SaaS (free trial at https://cloud.exasol.com/signup): create a database, add your IPv4 to
+**Security → allow list**, and take the connection string, user name and a personal access token
+from **Connect via tools**. Or run `make exasol-up` for a local docker-db (x86_64 hosts).
+
 ```bash
-make exasol-up                      # docker-db (x86_64; emulated on Apple Silicon)
-cp .env.example .env                # set CAUSA_BACKEND=exasol
+cp .env.example .env                # CAUSA_BACKEND=exasol, DSN host:8563, user, token as password
 uv run causa sim run
-uv run causa lineage impact RAW.SHOP_ORDERS --query-log audit   # use Exasol's own audit log
+uv run causa eval health && uv run causa eval verdict
+uv run causa lineage trace MART.DAILY_REVENUE --column NET_REVENUE_EUR --query-log audit
 ```
+
+`--query-log audit` reads Exasol's own `EXA_STATISTICS.EXA_DBA_AUDIT_SQL` (auditing is on by default
+on SaaS; needs a DBA or `SELECT ANY DICTIONARY`): no instrumentation of the pipeline is needed.
+
+Validated on an XSmall Exasol SaaS cluster (2025.1, eu-central-1), driven from a laptop in India:
+
+| | DuckDB | Exasol SaaS |
+|---|---|---|
+| Warehouse after 168 days (order lines / true revenue / query log / snapshots) | 387,750 / €829,668,345.48 / 4,598 / 139,440 | identical (reported revenue within €0.84 of €818M: exact DECIMAL arithmetic) |
+| Health engine: incident recall / business calm / alert precision | 100% / 100% / 100% | 100% / 100% / 100% (21 s) |
+| Verdict with replay: windows within tolerance, worst error | 11/11, 0.8% | 11/11, 0.8% (3 min) |
+| Lineage of `NET_REVENUE_EUR` from the simulated log vs Exasol's audit log | | identical columns and gating predicates |
+
+The simulator itself takes ~35 min there (one ~0.2 s round trip per statement from India to
+Frankfurt; small batches go through a prepared `INSERT`, large ones through `IMPORT`).
 
 All SQL is authored in the **Exasol dialect**. The DuckDB backend exists only so the engines can be
 developed and tested without a cluster; it transpiles statements with `sqlglot`.
@@ -237,5 +257,5 @@ src/causa/
   simulator/     synthetic company, scenario, incidents, workloads
   cli.py
 tests/
-docker/          docker-compose for a local Exasol
+docker/          docker-compose for a local Exasol (x86_64)
 ```
