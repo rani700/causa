@@ -101,9 +101,12 @@ def test_query_log_captures_every_layer(simulate: Simulate) -> None:
 
 
 def test_simulation_is_deterministic(simulate: Simulate) -> None:
-    _, a = simulate(days=5)
-    _, b = simulate(days=5)
-    assert a.true_net_revenue == b.true_net_revenue
+    wa, a = simulate(days=5)
+    wb, b = simulate(days=5)
+    # Same rows, byte for byte; float totals may differ in the last digit because polars sums in parallel.
+    fingerprint = "SELECT COUNT(*), SUM(ORDER_ID * LINE_NO), SUM(QUANTITY), MIN(UNIT_PRICE) FROM RAW.SHOP_ORDER_LINES"
+    assert wa.query(fingerprint).rows() == wb.query(fingerprint).rows()
+    assert a.true_net_revenue == pytest.approx(b.true_net_revenue, rel=1e-12)
     assert a.query_log_rows == b.query_log_rows
 
 
