@@ -54,13 +54,19 @@ def effects_line(seg: Segment, e: Explanation) -> str | None:
 
 
 NOTABLE_CHANGE = 0.25
+MATERIAL_SHARE = 0.005  # of the metric's baseline
 
 
-def _notable(d: Driver) -> bool:
-    """When the total is normal, only movements that are large in their own right are worth showing."""
+def notable(d: Driver, floor: float) -> bool:
+    """When the total is normal, only movements that are large in their own right *and* material
+    (at least ``floor`` in absolute value) are worth showing."""
     pct = d.segment.pct
     own = d.segment.vanished or (pct is not None and abs(pct) >= NOTABLE_CHANGE)
-    return own or any(_notable(c) for c in d.children)
+    return (own and abs(d.segment.delta) >= floor) or any(notable(c, floor) for c in d.children)
+
+
+def material_floor(e: Explanation) -> float:
+    return MATERIAL_SHARE * abs(e.total.baseline)
 
 
 def driver_lines(d: Driver, e: Explanation, depth: int = 0, notable_only: bool = False) -> list[str]:
@@ -82,7 +88,7 @@ def driver_lines(d: Driver, e: Explanation, depth: int = 0, notable_only: bool =
     for off in [] if notable_only else d.offsets:
         lines.append(f"{pad}    partly offset by {off.label}: {money(off.delta, e.metric.unit)}")
     for child in d.children:
-        if not notable_only or _notable(child):
+        if not notable_only or notable(child, material_floor(e)):
             lines += driver_lines(child, e, depth + 1, notable_only)
     return lines
 
@@ -90,7 +96,7 @@ def driver_lines(d: Driver, e: Explanation, depth: int = 0, notable_only: bool =
 def render(e: Explanation) -> list[str]:
     lines = [headline(e)]
     quiet = e.unusual is False
-    drivers = [d for d in e.drivers if _notable(d)] if quiet else e.drivers
+    drivers = [d for d in e.drivers if notable(d, material_floor(e))] if quiet else e.drivers
     if drivers:
         lines.append("Underneath the normal-looking total, notable movements:" if quiet else "Drivers:")
         for d in drivers:

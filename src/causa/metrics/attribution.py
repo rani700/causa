@@ -153,6 +153,13 @@ class Explanation:
     queries: int
     significance: float | None = None  # robust z of the relative change vs comparable past changes
     typical_change: float | None = None  # robust sd of comparable past relative changes
+    typical_centre: float = 0.0  # median of comparable past relative changes (the usual drift)
+
+    def judge(self, relative_change: float) -> float | None:
+        """Robust z of any relative change of this metric against comparable past changes."""
+        if self.typical_change is None:
+            return None
+        return (relative_change - self.typical_centre) / self.typical_change
 
     @property
     def unusual(self) -> bool | None:
@@ -190,30 +197,44 @@ class Attributor:
         self._wh = wh
         self.s = settings or AttributionSettings()
         self._queries = 0
+        self._excluded: tuple[date, ...] = ()
 
     def explain(
-        self, metric: MetricDefinition, current: Period, baseline: Period | None = None, filters: Filters = ()
+        self,
+        metric: MetricDefinition,
+        current: Period,
+        baseline: Period | None = None,
+        filters: Filters = (),
+        excluded_days: frozenset[date] = frozenset(),
     ) -> Explanation:
+        """``excluded_days`` (dates of either period) are left out of both periods together with the
+        day they are compared with, e.g. to explain only the days no data incident touched."""
         baseline = baseline or current.same_weekdays_before()
         if current.overlaps(baseline):
             raise ValueError(f"current {current} and baseline {baseline} overlap")
         if current.days != baseline.days:
             raise ValueError(f"periods differ in length ({current.days} vs {baseline.days} days)")
         self._queries = 0
+        shift = (current.start - baseline.start).days
+        self._excluded = tuple(
+            sorted({d for x in excluded_days for d in (x, x - timedelta(days=shift), x + timedelta(days=shift))})
+        )
         total, views = self._level(metric, current, baseline, filters)
         sign = _direction(total, views)
         drivers, offsets = self._drill(metric, current, baseline, filters, total, views, total.delta, sign, 0)
-        significance, typical = self._significance(metric, current, baseline, filters, total)
+        significance, typical, centre = (
+            (None, None, 0.0) if self._excluded else self._significance(metric, current, baseline, filters, total)
+        )
         return Explanation(
-            metric, current, baseline, total, views, drivers, offsets, self._queries, significance, typical
+            metric, current, baseline, total, views, drivers, offsets, self._queries, significance, typical, centre
         )
 
     def _significance(
         self, metric: MetricDefinition, current: Period, baseline: Period, filters: Filters, total: Segment
-    ) -> tuple[float | None, float | None]:
+    ) -> tuple[float | None, float | None, float]:
         """Compares the change with the same comparison made over the previous windows."""
         if total.pct is None:
-            return None, None
+            return None, None, 0.0
         shift = (current.start - baseline.start).days
         first = current.shifted(-shift * (self.s.history_windows + 1)).start
         where = [f"{metric.time_column} BETWEEN {dt(first)} AND {dt(baseline.end)}", *_filter_sql(filters)]
@@ -235,12 +256,12 @@ class Attributor:
             if base > 0 and cur > 0:
                 changes.append(cur / base - 1)
         if len(changes) < MIN_HISTORY_WINDOWS:
-            return None, None  # too little history for a trustworthy spread
+            return None, None, 0.0  # too little history for a trustworthy spread
         centre = statistics.median(changes)
         typical = 1.4826 * statistics.median(abs(c - centre) for c in changes)
         if typical <= 0:
-            return None, None
-        return (total.pct - centre) / typical, typical
+            return None, None, 0.0
+        return (total.pct - centre) / typical, typical, centre
 
     # -- recursion ---------------------------------------------------------------------------
 
@@ -303,7 +324,7 @@ class Attributor:
         used = {d for d, _ in filters}
         dims = [d for d in metric.all_dimensions if d not in used]
         self._queries += 1
-        rows = self._wh.query(cube_sql(metric, current, baseline, filters, dims))
+        rows = self._wh.query(cube_sql(metric, current, baseline, filters, dims, self._excluded))
         has_volume = metric.volume_column is not None
 
         def seg(row: dict[str, object], extra: Filters) -> Segment:
@@ -358,7 +379,14 @@ class Attributor:
         )
 
 
-def cube_sql(metric: MetricDefinition, current: Period, baseline: Period, filters: Filters, dims: list[str]) -> str:
+def cube_sql(
+    metric: MetricDefinition,
+    current: Period,
+    baseline: Period,
+    filters: Filters,
+    dims: list[str],
+    excluded: tuple[date, ...] = (),
+) -> str:
     t = metric.time_column
     is_cur = f"CASE WHEN {t} BETWEEN {dt(current.start)} AND {dt(current.end)} THEN 1 ELSE 0 END"
     cols = [f"CAST(COALESCE(CAST({d} AS VARCHAR(200)), '{BLANK}') AS VARCHAR(200)) AS {d}" for d in dims]
@@ -370,6 +398,8 @@ def cube_sql(metric: MetricDefinition, current: Period, baseline: Period, filter
     in_current = f"{t} BETWEEN {dt(current.start)} AND {dt(current.end)}"
     where = [f"({in_base} OR {in_current})"]
     where += _filter_sql(filters)
+    if excluded:
+        where.append(f"{t} NOT IN ({', '.join(dt(d) for d in excluded)})")
     if metric.filter:
         where.append(f"({metric.filter})")
 

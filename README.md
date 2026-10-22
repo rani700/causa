@@ -19,8 +19,8 @@ features break revenue down but assume the data is correct. Causa joins the two.
 | 1. Lineage from the query log (column-level + row-gating predicates + blast radius) | ✅ |
 | 2. Data health detectors, lineage-focused, grouped into cases | ✅ |
 | 3. Metric attribution (recursive drill-down, Shapley volume/rate split, significance, restatements) | ✅ |
-| 4. Business-vs-data classifier | ⏳ next |
-| 5. Counterfactual replay + recall | ⏳ |
+| 4. Business-vs-data verdict (linkage, mechanism-aware impact estimates, evidence, confidence) | ✅ |
+| 5. Counterfactual replay + recall | ⏳ next |
 | Investigator agent, API, Slack, UI | ⏳ |
 
 ## Quickstart
@@ -36,6 +36,8 @@ uv run causa eval health           # score the health engine against ground trut
 uv run causa explain net_revenue --current 2026-10-06..2026-10-12
 uv run causa explain net_revenue --current 2026-10-01..2026-10-05     # a churned whale under a normal total
 uv run causa metrics restatements net_revenue --since 2026-05-01 --until 2026-10-17 --dimension REGION
+uv run causa verdict net_revenue --current 2026-10-01..2026-10-07    # data incidents + the real story
+uv run causa eval verdict          # estimated data impact vs the true gap, for every event
 make test
 ```
 
@@ -128,6 +130,37 @@ distinct orders, dimensions, high-cardinality "deep" dimensions such as customer
   that changed after they were reported (late batches, failed loads that were re-run) stay visible
   even after the warehouse has silently healed
 
+### Engine 4: real change or broken data? (`causa.verdict`)
+
+`causa verdict` splits a metric's change into data incidents and real business change:
+
+- **relevance and linkage**: a health case counts if lineage says its table feeds the metric. Its
+  affected rows are found through a *bridge*: a table on the lineage path that carries the affected
+  segment (feed, currency) and shares a key with the metric table. `CURRENCY=JPY` reaches the fact
+  table through `STG.ORDERS`.
+- **days**: health incidents are dated by load day, metrics by business date; the typical lag of
+  each table (measured, not configured) converts one into the other. Incidents in the *baseline*
+  count too: they distort what the present is compared with.
+- **impact, by mechanism**, each method stated in the output:
+  - schema drift, lost feeds: difference-in-differences against the rest of the metric, with a 95%
+    band from historical volatility and an alignment z-score
+  - wrong reference values (FX): the observed factor applied to the affected rows
+  - duplicated keys: observed = true / (1 - duplicate share)
+  - partial NULLs in a gating column: row loss, assuming dropped rows were average
+  - late batches that arrived, failed loads that were re-run: *healed*, no impact on today's data
+    (the restatements show what people saw at the time)
+- **evidence in log-odds**, every item printed: severity, integrity signals vs shape-only signals,
+  a new category value (business-like), alignment, restatements. A finding counts as data at 60%.
+- **no double counting**: findings about the same rows on the same days are merged
+- **business remainder**: judged against normal variation and explained again by attribution on
+  the days no incident touched (that is where a churned customer surfaces under a broken feed)
+
+`causa eval verdict` compares the estimated data impact with the true gap (reported change minus
+true change) for the week starting at every event. On the default scenario and two unseen seeds:
+30 of 33 windows within 10% of the change or inside the 95% band, median error under 1%, and no
+business event ever claimed as data. The three misses are all partial-NULL row loss, overestimated
+by about 60% because the dropped rows were smaller than average; engine 5's replay addresses this.
+
 ## Layout
 
 ```
@@ -137,6 +170,7 @@ src/causa/
   lineage/       statement parser, actor identification, lineage graph
   health/        monitor discovery, profiling SQL, detectors, cases
   metrics/       metric definitions, attribution, narrative, snapshots and restatements
+  verdict/       linkage, impact estimators, evidence and verdicts
   store.py       Causa's own tables (CAUSA schema)
   evaluation.py  scoring against the simulator's ground truth
   simulator/     synthetic company, scenario, incidents, workloads

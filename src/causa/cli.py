@@ -12,7 +12,7 @@ from rich.console import Console
 from rich.progress import Progress
 from rich.table import Table
 
-from causa.evaluation import evaluate_health, load_events
+from causa.evaluation import VerdictResult, evaluate_health, load_events, true_data_gap
 from causa.health import HealthReport, HealthScanner, Severity
 from causa.lineage import LineageGraph, build_lineage
 from causa.metrics.attribution import Attributor, Period
@@ -23,6 +23,8 @@ from causa.simulator.runner import run_simulation
 from causa.simulator.scenario import default_scenario
 from causa.sources.catalog import Catalog
 from causa.sources.query_log import ExasolAuditLog, QueryLogSource, TableQueryLog
+from causa.verdict import Investigator
+from causa.verdict.narrative import render as render_verdict
 from causa.warehouse import Warehouse, connect
 
 app = typer.Typer(no_args_is_help=True, help="Causa: root-cause engine for business metrics.")
@@ -214,6 +216,30 @@ def explain(
     console.print(f"[dim]{explanation.queries} queries pushed down to the warehouse[/]")
 
 
+@app.command()
+def verdict(
+    metric: str,
+    current: Annotated[str, typer.Option(help="Period to judge, e.g. 2026-10-06..2026-10-12.")],
+    baseline: Annotated[
+        str | None, typer.Option(help="Comparison period (default: same weekdays one week earlier).")
+    ] = None,
+    query_log: QueryLogOption = "OPS.QUERY_LOG",
+    config: ConfigOption = "causa.yaml",
+) -> None:
+    """Is the change in METRIC real, or broken data? Splits it, with evidence and confidence."""
+    definition = load_config(config).metric(metric)
+    with connect() as wh:
+        log_frame = _query_log(wh, query_log).fetch()
+        catalog = Catalog.load(wh)
+        graph = build_lineage(log_frame, catalog)
+        with console.status("Investigating"):
+            result = Investigator(wh, catalog, graph, log_frame).verdict(
+                definition, Period.parse(current), Period.parse(baseline) if baseline else None
+            )
+    for line in render_verdict(result):
+        console.print(line, highlight=False, soft_wrap=True)
+
+
 @metrics_app.command("restatements")
 def show_restatements(
     metric: str,
@@ -267,6 +293,75 @@ def eval_health(
     )
     for c in result.false_alarms:
         console.print(f"  [yellow]unmatched[/] {c.case_id} {c.severity.value}: {c.primary.summary}")
+
+
+@eval_app.command("verdict")
+def eval_verdict(config: ConfigOption = "causa.yaml") -> None:
+    """Does the estimated data impact match what data problems really did to net revenue?"""
+    definition = load_config(config).metric("net_revenue")
+    results = []
+    with connect() as wh:
+        events = load_events(wh)
+        log_frame = TableQueryLog(wh).fetch()
+        catalog = Catalog.load(wh)
+        graph = build_lineage(log_frame, catalog)
+        first, last = events["start_date"].min(), events["start_date"].max()
+        with console.status("Scanning health once for all windows"):
+            report = HealthScanner(wh, catalog, graph).scan(
+                first - timedelta(days=7),
+                last + timedelta(days=10),
+                log_frame,  # type: ignore[operator]
+            )
+        investigator = Investigator(wh, catalog, graph, log_frame, report)
+        for ev in events.iter_rows(named=True):
+            current = Period(ev["start_date"], ev["start_date"] + timedelta(days=6))
+            baseline = current.same_weekdays_before()
+            with console.status(f"Judging {ev['event_id']} ({current})"):
+                v = investigator.verdict(definition, current, baseline)
+            reported, gap = true_data_gap(wh, "NET_REVENUE_EUR", current, baseline)
+            sds = [f.estimate.sd for f in v.data_findings if f.estimate.sd]
+            band = None
+            if sds and len(sds) == len(v.data_findings):
+                spread = 2 * sum(sd**2 for sd in sds) ** 0.5
+                band = (v.data_impact - spread, v.data_impact + spread)
+            results.append(
+                VerdictResult(
+                    ev["event_id"],
+                    ev["nature"],
+                    ev["kind"],
+                    str(current),
+                    reported,
+                    gap,
+                    v.data_impact,
+                    band,
+                    len(v.data_findings),
+                )
+            )
+    table = Table(title="Verdict engine vs ground truth (net revenue, week starting at each event)")
+    for col in ("event", "nature", "kind", "reported change", "true data gap", "Causa data impact", "error"):
+        table.add_column(col, justify="right" if "change" in col or "gap" in col or "impact" in col else "left")
+    table.add_column("error / change", justify="right")
+    for r in results:
+        ok = r.relative_error <= 0.10 or (r.band is not None and r.band[0] <= r.true_data_gap <= r.band[1])
+        style = "green" if ok else "red"
+        table.add_row(
+            r.event_id,
+            r.nature,
+            r.kind,
+            money(r.reported_change, "EUR"),
+            money(r.true_data_gap, "EUR"),
+            money(r.estimated_data_impact, "EUR"),
+            money(r.error, "EUR"),
+            f"[{style}]{r.relative_error:.1%}[/]",
+        )
+    console.print(table)
+    errors = sorted(r.relative_error for r in results)
+    good = sum(1 for r in results if r.relative_error <= 0.10 or (r.band and r.band[0] <= r.true_data_gap <= r.band[1]))
+    console.print(
+        f"median error {errors[len(errors) // 2]:.1%} of the change explained; "
+        f"worst {errors[-1]:.1%}; within 10% or the 95% band: "
+        f"{good}/{len(results)}"
+    )
 
 
 if __name__ == "__main__":

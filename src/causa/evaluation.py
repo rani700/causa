@@ -92,3 +92,43 @@ def evaluate_health(report: HealthReport, events: pl.DataFrame) -> HealthEvaluat
             matched |= {c.case_id for c in cases}
     false_alarms = [c for c in report.cases if c.severity in ALERTING and c.case_id not in matched]
     return HealthEvaluation(results, false_alarms)
+
+
+# -- engine 4: verdicts ---------------------------------------------------------------------------
+
+
+@dataclass
+class VerdictResult:
+    event_id: str
+    nature: str
+    kind: str
+    current: str
+    reported_change: float
+    true_data_gap: float  # reported change minus true change: what data problems did to the number
+    estimated_data_impact: float
+    band: tuple[float, float] | None
+    data_cases: int
+
+    @property
+    def error(self) -> float:
+        return self.estimated_data_impact - self.true_data_gap
+
+    @property
+    def relative_error(self) -> float:
+        """Error relative to the size of the change being explained."""
+        return abs(self.error) / max(abs(self.reported_change), 1.0)
+
+
+def true_data_gap(wh: Warehouse, metric_column: str, current: object, baseline: object) -> tuple[float, float]:
+    """(reported change, reported change - true change) from the simulator's ground truth."""
+
+    def total(table: str, period) -> float:  # type: ignore[no-untyped-def]
+        value = wh.scalar(
+            f"SELECT SUM({metric_column}) FROM {table} WHERE ORDER_DATE BETWEEN DATE '{period.start}' "
+            f"AND DATE '{period.end}'"
+        )
+        return float(value or 0.0)  # type: ignore[arg-type]
+
+    reported = total("MART.DAILY_REVENUE", current) - total("MART.DAILY_REVENUE", baseline)
+    true = total("SIM.TRUE_DAILY_REVENUE", current) - total("SIM.TRUE_DAILY_REVENUE", baseline)
+    return reported, reported - true

@@ -110,7 +110,7 @@ class HealthScanner:
         if query_log is not None:
             incidents += self._failed_writes(query_log, since, until)
         reference_tables = {m.table for m in monitors if m.segment_column and m.segment_column in m.key_columns}
-        for incident in incidents:
+        for incident in (x for i in incidents for x in (i, *i.propagated)):
             if incident.signal is Signal.VALUE_SHIFT and incident.table not in reference_tables:
                 incident.evidence["mix_sensitive"] = True
         incidents.sort(key=lambda i: (i.start, -abs(i.peak_score)))
