@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Causa</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%235b5bd6'/%3E%3Cpath d='M9 22 L16 9 L23 22' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='16' cy='22' r='2.5' fill='white'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8"/><path d="M9 22 L16 9 L23 22"/><circle cx="16" cy="22" r="2.5"/></svg>
+      <span class="brand-name">Causa</span>
+      <span class="brand-tag">root cause for business metrics</span>
+    </div>
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-view="overview" aria-selected="true">Overview</button>
+      <button role="tab" data-view="incidents">Incidents</button>
+      <button role="tab" data-view="lineage">Lineage</button>
+      <button role="tab" data-view="ask">Ask</button>
+    </nav>
+    <div class="env" id="env"></div>
+  </header>
+
+  <main>
+    <!-- Overview: is the change real, how much is broken data, who saw wrong numbers -->
+    <section class="view" id="view-overview">
+      <div class="controls">
+        <label class="field">
+          <span>Metric</span>
+          <select id="metric"></select>
+        </label>
+        <div class="week">
+          <button class="icon-btn" id="prev-week" title="Previous week" aria-label="Previous week">&#8249;</button>
+          <div class="week-label">
+            <span class="week-current" id="week-current"></span>
+            <span class="week-baseline" id="week-baseline"></span>
+          </div>
+          <button class="icon-btn" id="next-week" title="Next week" aria-label="Next week">&#8250;</button>
+        </div>
+        <span class="hint">Click the chart to pick the week ending on that day.</span>
+      </div>
+
+      <div class="card chart-card">
+        <div class="chart-head">
+          <h2 id="chart-title">Daily value</h2>
+          <div class="legend">
+            <span><i class="sw sw-week"></i>Selected week</span>
+            <span><i class="sw sw-base"></i>Compared with</span>
+            <span><i class="sw sw-crit"></i>Critical / high data incident</span>
+            <span><i class="sw sw-med"></i>Medium</span>
+          </div>
+        </div>
+        <div id="chart" class="chart"></div>
+      </div>
+
+      <div id="investigation"></div>
+    </section>
+
+    <section class="view" id="view-incidents" hidden>
+      <div class="controls">
+        <label class="field">
+          <span>Minimum severity</span>
+          <select id="min-severity">
+            <option value="critical">Critical</option>
+            <option value="high">High</option>
+            <option value="medium" selected>Medium</option>
+            <option value="low">Low</option>
+          </select>
+        </label>
+        <span class="hint" id="incidents-hint"></span>
+      </div>
+      <div class="card" id="timeline"></div>
+      <div id="cases"></div>
+    </section>
+
+    <section class="view" id="view-lineage" hidden>
+      <div class="card lineage-card">
+        <div class="chart-head">
+          <h2>Data flow, reconstructed from the query log</h2>
+          <div class="legend">
+            <span><i class="sw sw-up"></i>Upstream</span>
+            <span><i class="sw sw-down"></i>Downstream</span>
+            <span><i class="sw sw-crit"></i>Blast radius</span>
+            <span><i class="sw sw-med"></i>Schema changed</span>
+          </div>
+        </div>
+        <p class="hint" style="margin:0 0 6px">Select a table or a tool to see where its data comes from, what it feeds, and who would be hit if it broke.</p>
+        <div id="lineage" class="lineage"></div>
+        <aside class="side" id="lineage-side" hidden></aside>
+      </div>
+    </section>
+
+    <section class="view" id="view-ask" hidden>
+      <div class="chat card">
+        <div id="messages" class="messages"></div>
+        <div class="suggestions" id="suggestions"></div>
+        <form id="ask-form" class="ask-form">
+          <textarea id="question" rows="2" placeholder="Ask about a metric, an incident, or who saw wrong numbers…"></textarea>
+          <button type="submit" class="primary" id="ask-btn">Ask</button>
+        </form>
+      </div>
+    </section>
+  </main>
+
+  <div id="tooltip" class="tooltip" hidden></div>
+  <div id="toast" class="toast" hidden></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

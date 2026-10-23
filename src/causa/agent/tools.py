@@ -179,10 +179,18 @@ class Toolbox:
         filters = tuple((k.upper(), v) for k, _, v in (w.partition("=") for w in where or []))
         return explanation_dict(Attributor(self.ws.wh).explain(self._metric(metric), cur, base, filters))
 
-    def judge_change(self, metric: str, current: str, baseline: str | None = None) -> dict[str, Any]:
+    def _verdict(self, metric: str, current: str, baseline: str | None) -> Verdict:
         cur, base = self._periods(current, baseline)
         self.ws.health(base.start, cur.end + timedelta(days=3))
-        return verdict_dict(self.ws.investigator(replay=True).verdict(self._metric(metric), cur, base))
+        return self.ws.investigator(replay=True).verdict(self._metric(metric), cur, base)
+
+    def judge_change(self, metric: str, current: str, baseline: str | None = None) -> dict[str, Any]:
+        return verdict_dict(self._verdict(metric, current, baseline))
+
+    def investigate(self, metric: str, current: str, baseline: str | None = None) -> dict[str, Any]:
+        """Verdict and recall from one engine run (not an agent tool: the web UI's main view)."""
+        verdict = self._verdict(metric, current, baseline)
+        return {"verdict": verdict_dict(verdict), **self._recalls(verdict)}
 
     def health_cases(self, since: str, until: str, min_severity: str = "medium") -> dict[str, Any]:
         start, end = date.fromisoformat(since), date.fromisoformat(until)
@@ -207,9 +215,9 @@ class Toolbox:
         }
 
     def recall_consumers(self, metric: str, current: str, baseline: str | None = None) -> dict[str, Any]:
-        cur, base = self._periods(current, baseline)
-        self.ws.health(base.start, cur.end + timedelta(days=3))
-        verdict = self.ws.investigator(replay=True).verdict(self._metric(metric), cur, base)
+        return self._recalls(self._verdict(metric, current, baseline))
+
+    def _recalls(self, verdict: Verdict) -> dict[str, Any]:
         out = []
         for r in recall(verdict, self.ws.graph, self.ws.today):
             out.append(

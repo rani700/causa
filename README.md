@@ -23,7 +23,8 @@ features break revenue down but assume the data is correct. Causa joins the two.
 | 5. Counterfactual replay (re-runs the real pipeline on repaired data) + recall with notices | ✅ |
 | Investigator agent (Claude + engine tools), morning brief, Slack, HTTP API | ✅ |
 | Validated end to end on Exasol SaaS (2025.1) | ✅ |
-| Web UI, cost per decision | ⏳ next |
+| Web UI (overview, incidents, lineage map with blast radius, ask) | ✅ |
+| Cost per decision | ⏳ next |
 
 ## Quickstart
 
@@ -43,7 +44,7 @@ uv run causa eval verdict          # data impact (replayed) vs the true gap, for
 uv run causa recall net_revenue --current 2026-10-06..2026-10-12 --out notices.md
 uv run causa brief net_revenue --day 2026-10-08          # add --post with CAUSA_SLACK_WEBHOOK_URL set
 ANTHROPIC_API_KEY=... uv run causa ask "Why did revenue drop last week? Is it real?"
-uv run causa serve                 # HTTP API, docs at http://127.0.0.1:8000/docs
+uv run causa serve                 # web UI at http://127.0.0.1:8000, API docs at /docs
 make test
 ```
 
@@ -210,6 +211,21 @@ healed, or *still open* if the warehouse holds the damage), misstatement per day
 dashboard, scheduled report (editions, recipients), ML pipeline, reverse-ETL sync, spreadsheet and
 analyst that read affected data, plus the pipeline that carried the incident and the load days to
 re-run. Each gets a drafted correction notice; `--out notices.md` writes them to a file.
+
+### The web UI (`causa serve`, then http://127.0.0.1:8000)
+
+A dependency-free single page (`src/causa/web/`, plain HTML/CSS/JS, no build step, no CDN) over the API:
+
+- **Overview**: the metric's daily history with every data incident shaded; pick a week and Causa splits its
+  change into *broken data* and *real business change* (with a waterfall and one forwardable sentence), shows each
+  incident's cause, replayed impact, confidence and evidence, the real business drivers on clean days, and **who
+  saw wrong numbers**, with a ready-to-send correction notice per report, dashboard and sync.
+- **Incidents**: every health case on a timeline, with its evidence, the tables it touched, its week, and its
+  blast radius.
+- **Lineage**: connectors → RAW → STG → MART → reports → consumers, reconstructed from the query log; select
+  anything to trace it up and down, see the columns that gate its rows and its schema changes, and light up
+  everything a broken table would hit.
+- **Ask**: the investigator agent, with every tool call it made shown under its answer (needs `ANTHROPIC_API_KEY`).
 
 ### The investigator agent, the brief and the API
 

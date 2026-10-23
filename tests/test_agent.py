@@ -177,3 +177,36 @@ def test_api_serves_engines_and_agent(ws) -> None:
     assert verdict["data_incident_impact"] < 0
     asked = client.post("/ask", json={"question": "status?"}).json()
     assert asked["answer"] == "All good." and asked["conversation_id"]
+
+
+def test_web_ui_and_its_endpoints(ws, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    client = TestClient(create_app(ws))
+    page = client.get("/")
+    assert page.status_code == 200 and "/static/app.js" in page.text
+    assert client.get("/static/app.js").status_code == 200
+
+    status = client.get("/status").json()
+    assert status["backend"] == "duckdb" and status["agent_available"] is False
+    assert status["history_start"] <= str(day(0)) and status["metrics"][0]["name"] == "net_revenue"
+    # without a key the agent says why instead of failing
+    assert client.post("/ask", json={"question": "hi"}).status_code == 503
+
+    points = client.get("/metrics/net_revenue/series", params={"since": str(day(0)), "until": str(day(83))}).json()
+    assert len(points["points"]) == 84 and all(v > 0 for _, v in points["points"])
+
+    # one engine run gives both the verdict and the recall for the week of the schema drift
+    found = client.get("/metrics/net_revenue/investigation", params={"current": f"{day(77)}..{day(83)}"}).json()
+    assert found["verdict"]["data_incident_impact"] < 0
+    assert found["recalls"] and found["recalls"][0]["origin_table"] == "RAW.SHOP_ORDERS"
+
+    lineage = client.get("/lineage-map").json()
+    ids = {n["id"] for n in lineage["nodes"]}
+    assert {"table:RAW.SHOP_ORDERS", "table:MART.FCT_ORDER_LINES"} <= ids
+    assert all(e["source"] in ids and e["target"] in ids for e in lineage["edges"])
+    assert {e["kind"] for e in lineage["edges"]} == {"feeds", "loads", "reads"}
+    assert any(c["table"] == "RAW.SHOP_ORDERS" for c in lineage["schema_changes"])
+
+    blast = client.get("/lineage/RAW.SHOP_ORDERS/impact").json()
+    assert "MART.FCT_ORDER_LINES" in blast["tables"]
+    assert {a["node"] for a in blast["actors"] if a["reads"]} <= ids  # every reader is drawn on the map
