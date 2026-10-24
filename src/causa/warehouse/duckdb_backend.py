@@ -24,7 +24,15 @@ class DuckDBWarehouse(Warehouse):
             # Attached under a fixed name: DuckDB would otherwise name the catalog after the file,
             # and a file called causa.duckdb would collide with Causa's own CAUSA schema.
             Path(path).parent.mkdir(parents=True, exist_ok=True)
-            self._con.execute(f"ATTACH '{Path(path).as_posix()}' AS warehouse")
+            try:
+                self._con.execute(f"ATTACH '{Path(path).as_posix()}' AS warehouse")
+            except duckdb.IOException as exc:
+                if "lock" not in str(exc).lower():
+                    raise
+                raise RuntimeError(
+                    f"{path} is open in another process (only one may use a DuckDB file at a time; "
+                    "for example `causa serve` and `causa mcp`). Stop the other one, or use Exasol."
+                ) from exc
             self._con.execute("USE warehouse")
 
     def execute(self, sql: str) -> int:

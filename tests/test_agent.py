@@ -210,3 +210,40 @@ def test_web_ui_and_its_endpoints(ws, monkeypatch: pytest.MonkeyPatch) -> None:
     blast = client.get("/lineage/RAW.SHOP_ORDERS/impact").json()
     assert "MART.FCT_ORDER_LINES" in blast["tables"]
     assert {a["node"] for a in blast["actors"] if a["reads"]} <= ids  # every reader is drawn on the map
+
+
+def test_mcp_server_offers_the_agents_tools(ws) -> None:
+    import anyio
+    from mcp import Client
+
+    from causa.mcp_server import create_server
+
+    built: list[Toolbox] = []
+
+    def factory() -> Toolbox:
+        built.append(Toolbox(ws))
+        return built[-1]
+
+    async def session() -> None:
+        async with Client(create_server(factory)) as client:
+            assert "list_metrics first" in (client.instructions or "")
+            tools = {t.name: t for t in (await client.list_tools()).tools}
+            assert set(tools) == {t["name"] for t in TOOL_DEFINITIONS}
+            assert all(t.annotations and t.annotations.read_only_hint for t in tools.values())
+            # optional arguments are optional, not "required but nullable"
+            assert tools["judge_change"].input_schema["required"] == ["metric", "current"]
+            assert not built  # the warehouse is not touched until a tool runs
+
+            week = {"metric": "net_revenue", "current": f"{day(77)}..{day(83)}"}
+            verdict = await client.call_tool("judge_change", week)
+            assert not verdict.is_error
+            out = json.loads(verdict.content[0].text)
+            assert out["data_incident_impact"] < 0 and len(built) == 1
+
+            missing = await client.call_tool("judge_change", {"metric": "no_such_metric", "current": str(day(80))})
+            assert missing.is_error and "no_such_metric" in missing.content[0].text
+            refused = await client.call_tool("run_sql", {"sql": "DELETE FROM MART.FCT_ORDER_LINES"})
+            assert "only a single SELECT" in refused.content[0].text
+            assert len(built) == 1  # one workspace for the whole session
+
+    anyio.run(session)

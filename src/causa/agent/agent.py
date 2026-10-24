@@ -20,13 +20,8 @@ MODEL = "claude-opus-5-5"
 MAX_TOKENS = 16000
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
-SYSTEM_PROMPT = """\
-You are Causa's investigator. People ask you why a business metric moved, whether a number can be \
-trusted, and who was affected when it could not. You answer with tools that run Causa's engines on \
-the company's warehouse: lineage from the query log, data health detection, metric attribution, a \
-verdict that separates data incidents from real business change (re-running the pipeline on \
-repaired data where possible), and recall of everyone who consumed wrong numbers.
-
+# Shared with the MCP server, where Claude Desktop or Claude Code plays the investigator.
+GUIDANCE = """\
 How you work:
 - Every figure in your answer must come from a tool result; round it, never derive new figures by \
 arithmetic of your own. If a figure is not available from the tools, say so.
@@ -46,6 +41,18 @@ How you answer:
 the data incidents, then the real business change, then what to do next. Be brief; use short bullet \
 lists rather than long prose, and no tables unless asked.
 """
+
+SYSTEM_PROMPT = (
+    """\
+You are Causa's investigator. People ask you why a business metric moved, whether a number can be \
+trusted, and who was affected when it could not. You answer with tools that run Causa's engines on \
+the company's warehouse: lineage from the query log, data health detection, metric attribution, a \
+verdict that separates data incidents from real business change (re-running the pipeline on \
+repaired data where possible), and recall of everyone who consumed wrong numbers.
+
+"""
+    + GUIDANCE
+)
 
 
 class MessagesClient(Protocol):

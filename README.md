@@ -24,6 +24,7 @@ features break revenue down but assume the data is correct. Causa joins the two.
 | Investigator agent (Claude + engine tools), morning brief, Slack, HTTP API | ✅ |
 | Validated end to end on Exasol SaaS (2025.1) | ✅ |
 | Web UI (overview, incidents, lineage map with blast radius, ask) | ✅ |
+| MCP server: the same tools in Claude Desktop / Claude Code, on a Claude plan | ✅ |
 | Cost per decision | ⏳ next |
 
 ## Quickstart
@@ -45,6 +46,7 @@ uv run causa recall net_revenue --current 2026-10-06..2026-10-12 --out notices.m
 uv run causa brief net_revenue --day 2026-10-08          # add --post with CAUSA_SLACK_WEBHOOK_URL set
 ANTHROPIC_API_KEY=... uv run causa ask "Why did revenue drop last week? Is it real?"
 uv run causa serve                 # web UI at http://127.0.0.1:8000, API docs at /docs
+uv run causa mcp                   # MCP server (stdio) for Claude Desktop / Claude Code
 make test
 ```
 
@@ -253,6 +255,36 @@ as text or Slack Block Kit and posts only with `--post` and a configured `CAUSA_
 `causa serve` exposes the same through FastAPI: `/metrics`, `/metrics/{m}/explain|verdict|recall|brief`,
 `/health/cases`, `/lineage/{table}` and `POST /ask` (multi-turn by `conversation_id`).
 
+### In Claude Desktop or Claude Code (MCP, no API key)
+
+`causa mcp` serves the agent's tools over the [Model Context Protocol](https://modelcontextprotocol.io).
+The client's own Claude does the investigating, on the user's Claude plan, and every figure still
+comes from Causa's engines. The tools are the same definitions the agent uses (marked read-only),
+the server tells the client how to investigate (start with `judge_change`, never compute figures,
+keep data incidents and business change apart), and the warehouse connection opens on the first
+tool call. Backend and credentials come from `.env`, as for every other command.
+
+**Claude Code**: the repository's `.mcp.json` registers it; start `claude` in the repository and
+approve the `causa` server. Then ask, for example, *"Use causa: why did net revenue move in the week
+of 2026-10-06, and who saw wrong numbers?"*
+
+**Claude Desktop**: Settings → Developer → Edit Config, add the server, and restart Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "causa": {
+      "command": "/absolute/path/to/uv",
+      "args": ["--directory", "/absolute/path/to/causa", "run", "causa", "mcp"]
+    }
+  }
+}
+```
+
+Use absolute paths (`which uv`): Claude Desktop does not start from your shell. Add
+`"env": {"CAUSA_BACKEND": "duckdb"}` to use the local copy instead of Exasol. A DuckDB file can be
+open in only one process, so stop `causa serve` while Claude uses it (Exasol has no such limit).
+
 ## Layout
 
 ```
@@ -268,6 +300,7 @@ src/causa/
   agent/         investigator agent (Claude tool-use loop) and its engine-backed tools
   brief.py       deterministic morning brief (text and Slack Block Kit); slack.py posts it
   api.py         FastAPI service; workspace.py caches what the engines share
+  mcp_server.py  the agent's tools over MCP (stdio), for Claude Desktop and Claude Code
   store.py       Causa's own tables (CAUSA schema)
   evaluation.py  scoring against the simulator's ground truth
   simulator/     synthetic company, scenario, incidents, workloads

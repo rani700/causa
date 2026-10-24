@@ -364,6 +364,16 @@ def serve(
     uvicorn.run(create_app(Workspace(wh, config, query_log)), host=host, port=port)
 
 
+@app.command()
+def mcp(query_log: QueryLogOption = "OPS.QUERY_LOG", config: ConfigOption = "causa.yaml") -> None:
+    """Serve the investigator's tools over MCP (stdio) for Claude Desktop, Claude Code and other clients."""
+    from causa.agent import Toolbox
+    from causa.mcp_server import serve_stdio
+
+    # stdout carries the protocol: nothing else may print to it. Connect on the first tool call.
+    serve_stdio(lambda: Toolbox(Workspace(connect(client_name="causa-mcp"), config, query_log)))
+
+
 @metrics_app.command("restatements")
 def show_restatements(
     metric: str,
