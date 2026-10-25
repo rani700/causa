@@ -11,6 +11,21 @@ from causa.warehouse.duckdb_backend import DuckDBWarehouse
 
 START = date(2026, 3, 2)
 
+
+@pytest.fixture(autouse=True)
+def no_real_agent_keys(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Tests never see the developer's API keys from .env: the environment wins over .env, and an
+    empty key counts as unset."""
+    from causa.config import get_settings
+
+    for key in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.setenv(key, "")
+    monkeypatch.setenv("CAUSA_AGENT_PROVIDER", "auto")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 Simulate = Callable[..., tuple[DuckDBWarehouse, SimulationResult]]
 
 

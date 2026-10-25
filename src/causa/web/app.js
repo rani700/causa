@@ -815,7 +815,7 @@ function initAsk() {
   const m = metricDef();
   if (!s.agent_available) {
     $("#messages").innerHTML = `<div class="empty"><div class="big">The investigator agent is off</div>
-      Start the server with <code>ANTHROPIC_API_KEY</code> set to ask questions in plain language.<br>
+      Add <code>OPENAI_API_KEY</code> or <code>ANTHROPIC_API_KEY</code> to <code>.env</code> and restart the server to ask questions in plain language.<br>
       Everything else in Causa works without it: the agent only calls the same engines you see in the other tabs.</div>`;
     $("#ask-form").hidden = true;
     return;

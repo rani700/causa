@@ -297,15 +297,19 @@ def recall(
 def ask(
     question: Annotated[str | None, typer.Argument(help="A question; omit for an interactive session.")] = None,
     show_tools: Annotated[bool, typer.Option(help="Print every tool call the agent makes.")] = True,
-    effort: Annotated[str, typer.Option(help="Reasoning effort: low, medium, high, xhigh, max.")] = "high",
+    effort: Annotated[
+        str | None, typer.Option(help="Reasoning effort: low, medium, high, xhigh, max (default per provider).")
+    ] = None,
     query_log: QueryLogOption = "OPS.QUERY_LOG",
     config: ConfigOption = "causa.yaml",
 ) -> None:
-    """Ask the investigator agent (needs ANTHROPIC_API_KEY). Figures come from Causa's engines."""
-    from causa.agent import InvestigatorAgent, Toolbox
+    """Ask the investigator agent (OPENAI_API_KEY or ANTHROPIC_API_KEY). Figures come from Causa's engines."""
+    from causa.agent import NO_KEY, Toolbox, agent_provider, make_agent
 
+    if agent_provider() is None:
+        raise typer.BadParameter(NO_KEY)
     with connect() as wh:
-        agent = InvestigatorAgent(Toolbox(Workspace(wh, config, query_log)), effort=effort)
+        agent = make_agent(Toolbox(Workspace(wh, config, query_log)), effort=effort)
         prompts = iter([question]) if question else iter(lambda: console.input("[bold]ask> [/]"), None)
         for q in prompts:
             if q.strip() in {"", "exit", "quit"}:

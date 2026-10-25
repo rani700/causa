@@ -44,7 +44,7 @@ uv run causa verdict net_revenue --current 2026-10-01..2026-10-07    # data inci
 uv run causa eval verdict          # data impact (replayed) vs the true gap, for every event
 uv run causa recall net_revenue --current 2026-10-06..2026-10-12 --out notices.md
 uv run causa brief net_revenue --day 2026-10-08          # add --post with CAUSA_SLACK_WEBHOOK_URL set
-ANTHROPIC_API_KEY=... uv run causa ask "Why did revenue drop last week? Is it real?"
+uv run causa ask "Why did revenue drop last week? Is it real?"   # needs OPENAI_API_KEY or ANTHROPIC_API_KEY in .env
 uv run causa serve                 # web UI at http://127.0.0.1:8000, API docs at /docs
 uv run causa mcp                   # MCP server (stdio) for Claude Desktop / Claude Code
 make test
@@ -227,7 +227,7 @@ A dependency-free single page (`src/causa/web/`, plain HTML/CSS/JS, no build ste
 - **Lineage**: connectors → RAW → STG → MART → reports → consumers, reconstructed from the query log; select
   anything to trace it up and down, see the columns that gate its rows and its schema changes, and light up
   everything a broken table would hit.
-- **Ask**: the investigator agent, with every tool call it made shown under its answer (needs `ANTHROPIC_API_KEY`).
+- **Ask**: the investigator agent, with every tool call it made shown under its answer (needs `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in `.env`).
 
 **Speed on a remote warehouse.** Every query is a round trip (about 0.3 s from India to Frankfurt),
 so Causa avoids repeating them. A replay depends on the incident, not on the week being judged, so
@@ -238,8 +238,9 @@ incidents were already replayed about 4.5 s, a week seen before 0 s (it was 18 t
 
 ### The investigator agent, the brief and the API
 
-`causa ask` puts Claude (`claude-opus-5-5`, adaptive thinking, high effort) in front of the engines.
-Claude plans the investigation; **every figure comes from a tool**:
+`causa ask` puts a language model in front of the engines: Claude (`claude-opus-5-5`, high effort)
+or OpenAI (`gpt-5-nano` by default, the cheapest OpenAI model with function calling). The model plans
+the investigation; **every figure comes from a tool**:
 
 | Tool | Engine |
 |---|---|
@@ -253,6 +254,13 @@ Claude plans the investigation; **every figure comes from a tool**:
 Tools are strict JSON schemas; system prompt and tools are prompt-cached; the conversation is
 append-only; refusals fall back server-side (`fallbacks: "default"`); every tool call is recorded and
 shown, so each answer has an audit trail. The loop is tested against a scripted client.
+
+**Choosing the model.** Put `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in `.env`. With both, Claude is
+used unless `CAUSA_AGENT_PROVIDER=openai`; `CAUSA_OPENAI_MODEL` picks another OpenAI model. Both
+agents share the toolbox, the prompt and the audit trail; the OpenAI one runs on the Responses API
+(function calling with the same strict schemas, `store=False`, reasoning passed back encrypted).
+Measured on Exasol SaaS with `gpt-5-nano`: a "why did revenue drop, is it real, who saw it?"
+question takes 3 tool calls and about 13k input / 8k output tokens, under half a US cent.
 
 `causa brief` is the morning message. It is **deterministic** (no language model): last 7 days vs the
 same weekdays before, the data/business split, each incident with its replayed impact and where it

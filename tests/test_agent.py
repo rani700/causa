@@ -121,7 +121,7 @@ def test_agent_runs_tools_and_answers(ws) -> None:
     assert first["model"] == MODEL and first["betas"] == [FALLBACK_BETA] and first["fallbacks"] == "default"
     assert first["system"][0]["cache_control"] == {"type": "ephemeral"}
     assert first["tools"] is TOOL_DEFINITIONS
-    assert first["messages"][0]["content"].startswith(f"(Today is {ws.today}.)")
+    assert first["messages"][0]["content"].startswith(f"(Today is {ws.today}. Metrics: net_revenue, ")
     # Both results go back together, in one user turn, matched by id.
     results = second["messages"][-1]["content"]
     assert [r["tool_use_id"] for r in results] == ["t1", "t2"] and not any(r["is_error"] for r in results)
@@ -281,3 +281,91 @@ def test_investigations_reuse_replays_and_verdicts(ws, monkeypatch: pytest.Monke
     )
     assert second["data_incident_impact"] == round(fresh.data_impact, 2) < 0
     assert first["findings"][0]["method"].startswith("counterfactual replay")
+
+
+# -- the OpenAI agent --------------------------------------------------------------------------
+
+
+def fn_call(call_id: str, name: str, **arguments: Any) -> SimpleNamespace:
+    return SimpleNamespace(type="function_call", call_id=call_id, name=name, arguments=json.dumps(arguments))
+
+
+def message(*parts: SimpleNamespace) -> SimpleNamespace:
+    return SimpleNamespace(type="message", role="assistant", content=list(parts))
+
+
+def response(*output: SimpleNamespace, status: str = "completed") -> SimpleNamespace:
+    usage = SimpleNamespace(input_tokens=100, output_tokens=20, input_tokens_details=SimpleNamespace(cached_tokens=64))
+    return SimpleNamespace(output=list(output), status=status, model="gpt-5-nano", usage=usage)
+
+
+class ScriptedResponses:
+    def __init__(self, *responses: SimpleNamespace) -> None:
+        self.responses = list(responses)
+        self.requests: list[dict[str, Any]] = []
+
+    def create(self, **kwargs: Any) -> SimpleNamespace:
+        self.requests.append({**kwargs, "input": list(kwargs["input"])})
+        return self.responses.pop(0)
+
+
+def output_text(t: str) -> SimpleNamespace:
+    return SimpleNamespace(type="output_text", text=t)
+
+
+def test_openai_agent_runs_the_same_tools(ws) -> None:
+    from causa.agent import OpenAIInvestigatorAgent
+    from causa.agent.agent import SYSTEM_PROMPT
+    from causa.agent.openai_agent import OPENAI_TOOLS
+
+    fake = ScriptedResponses(
+        response(
+            SimpleNamespace(type="reasoning", id="rs_1", encrypted_content="opaque"),
+            fn_call("c1", "list_metrics"),
+            fn_call("c2", "lineage", table="RAW.FX_RATES", column=None),
+        ),
+        response(message(output_text("Net revenue is the metric to look at."))),
+    )
+    agent = OpenAIInvestigatorAgent(Toolbox(ws), responses_client=fake)
+    answer = agent.ask("what can you explain?")
+
+    assert answer.text == "Net revenue is the metric to look at." and answer.model == "gpt-5-nano"
+    assert [c.name for c in answer.tool_calls] == ["list_metrics", "lineage"] and not answer.tool_calls[1].error
+    first, second = fake.requests
+    assert first["model"] == "gpt-5-nano" and first["instructions"] == SYSTEM_PROMPT and first["store"] is False
+    assert first["text"] == {"verbosity": "low"}
+    assert first["input"][0]["content"].startswith(f"(Today is {ws.today}. Metrics: net_revenue, ")
+    # one function per engine tool, with the agent's strict schema unchanged
+    assert [t["name"] for t in first["tools"]] == [t["name"] for t in TOOL_DEFINITIONS]
+    assert first["tools"] is OPENAI_TOOLS and all(t["strict"] for t in OPENAI_TOOLS)
+    # the reasoning item goes back unchanged, then each result matched by call id
+    sent = second["input"]
+    assert sent[1] == {"type": "reasoning", "id": "rs_1", "encrypted_content": "opaque"}
+    assert [i["call_id"] for i in sent if i.get("type") == "function_call_output"] == ["c1", "c2"]
+    assert answer.input_tokens == 200 and answer.cache_read_tokens == 128
+
+
+def test_openai_agent_reports_tool_errors_and_refusals(ws) -> None:
+    from causa.agent import OpenAIInvestigatorAgent
+
+    fake = ScriptedResponses(
+        response(fn_call("c1", "explain_metric", metric="nope", current="2026-01-01", baseline=None, where=None)),
+        response(message(SimpleNamespace(type="refusal", refusal="no"))),
+    )
+    answer = OpenAIInvestigatorAgent(Toolbox(ws), responses_client=fake).ask("explain nope")
+    (call,) = answer.tool_calls
+    assert call.error and "unknown metric" in call.output
+    assert answer.stop_reason == "refusal" and "declined" in answer.text
+
+
+def test_provider_follows_the_configured_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    from causa.agent import agent_provider
+    from causa.config import AgentProvider, Settings
+
+    assert agent_provider(Settings()) is None  # no keys (see conftest)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    assert agent_provider(Settings()) is AgentProvider.OPENAI
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    assert agent_provider(Settings()) is AgentProvider.ANTHROPIC  # auto prefers Claude
+    monkeypatch.setenv("CAUSA_AGENT_PROVIDER", "openai")
+    assert agent_provider(Settings()) is AgentProvider.OPENAI

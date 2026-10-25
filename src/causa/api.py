@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import threading
 import uuid
 from collections.abc import Callable
@@ -15,7 +14,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from causa.agent import InvestigatorAgent, Toolbox
+from causa.agent import NO_KEY, Agent, Toolbox, agent_provider, make_agent
 from causa.brief import morning_brief, to_slack, to_text
 from causa.lineage import LineageGraph
 from causa.lineage.graph import EdgeKind
@@ -40,13 +39,14 @@ class AskResponse(BaseModel):
     cache_read_tokens: int
 
 
-def create_app(workspace: Workspace, agent_factory: Callable[[Toolbox], InvestigatorAgent] | None = None) -> FastAPI:
+def create_app(workspace: Workspace, agent_factory: Callable[[Toolbox], Agent] | None = None) -> FastAPI:
     app = FastAPI(title="Causa", summary="Root-cause engine for business metrics")
     toolbox = Toolbox(workspace)
     lock = threading.Lock()  # one warehouse connection: serialise engine work
-    conversations: dict[str, InvestigatorAgent] = {}
-    make_agent = agent_factory or (lambda tb: InvestigatorAgent(tb))
-    agent_available = agent_factory is not None or bool(os.environ.get("ANTHROPIC_API_KEY"))
+    conversations: dict[str, Agent] = {}
+    new_agent = agent_factory or make_agent
+    provider = agent_provider()
+    agent_available = agent_factory is not None or provider is not None
 
     def run(name: str, **arguments: Any) -> Any:
         try:
@@ -75,6 +75,7 @@ def create_app(workspace: Workspace, agent_factory: Callable[[Toolbox], Investig
             "history_start": str(first.date()) if first else None,
             "metrics": metrics["metrics"],
             "agent_available": agent_available,
+            "agent_provider": str(provider) if provider else None,
         }
 
     @app.get("/metrics")
@@ -162,11 +163,11 @@ def create_app(workspace: Workspace, agent_factory: Callable[[Toolbox], Investig
     @app.post("/ask")
     def ask(request: AskRequest) -> AskResponse:
         if not agent_available:
-            raise HTTPException(503, "The investigator agent needs ANTHROPIC_API_KEY in the server's environment.")
+            raise HTTPException(503, NO_KEY)
         conversation_id = request.conversation_id or uuid.uuid4().hex
         agent = conversations.get(conversation_id)
         if agent is None:
-            agent = conversations[conversation_id] = make_agent(toolbox)
+            agent = conversations[conversation_id] = new_agent(toolbox)
         with lock:
             answer = agent.ask(request.question)
         return AskResponse(

@@ -6,13 +6,19 @@ from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import SecretStr
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Backend(StrEnum):
     EXASOL = "exasol"
     DUCKDB = "duckdb"  # local development / CI only; SQL is still authored in the Exasol dialect
+
+
+class AgentProvider(StrEnum):
+    AUTO = "auto"  # Anthropic when its key is set, else OpenAI when its key is set
+    ANTHROPIC = "anthropic"
+    OPENAI = "openai"
 
 
 class Settings(BaseSettings):
@@ -29,6 +35,12 @@ class Settings(BaseSettings):
     exasol_tls_insecure: bool = False
 
     slack_webhook_url: SecretStr | None = None
+
+    # The investigator agent. Keys use the providers' own variable names, from the environment or .env.
+    agent_provider: AgentProvider = AgentProvider.AUTO
+    anthropic_api_key: SecretStr | None = Field(default=None, validation_alias=AliasChoices("ANTHROPIC_API_KEY"))
+    openai_api_key: SecretStr | None = Field(default=None, validation_alias=AliasChoices("OPENAI_API_KEY"))
+    openai_model: str = "gpt-5-nano"  # the cheapest OpenAI model with function calling
 
 
 @lru_cache

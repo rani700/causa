@@ -158,6 +158,11 @@ class Toolbox:
         cur = Period.parse(current)
         return cur, Period.parse(baseline) if baseline else cur.same_weekdays_before()
 
+    def context(self) -> str:
+        """Opens a conversation: the date and the exact metric names, so no turn is spent guessing."""
+        names = ", ".join(m.name for m in self.ws.config.metrics)
+        return f"(Today is {self.ws.today}. Metrics: {names}.)"
+
     # -- tools -------------------------------------------------------------------------------
 
     def list_metrics(self) -> dict[str, Any]:

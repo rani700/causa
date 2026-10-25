@@ -100,7 +100,7 @@ class InvestigatorAgent:
     def ask(self, question: str) -> AgentAnswer:
         """Answers one question; follow-up questions continue the same conversation."""
         if not self.history:
-            question = f"(Today is {self._tools.ws.today}.)\n\n{question}"
+            question = f"{self._tools.context()}\n\n{question}"
         self.history.append({"role": "user", "content": question})
         answer = AgentAnswer(text="")
 
