@@ -1,0 +1,101 @@
+name: release-and-publish
+
+# On every push to main: cut the next patch release (v0.0.1, v0.0.2, ...),
+# then build the Docker image and publish it to GHCR tagged with that exact
+# version AND `latest`. The homelab ArgoCD app pulls the `:latest` tag.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # create the GitHub release + git tag
+  packages: write   # push the image to GHCR
+
+env:
+  # Run JavaScript actions on Node 24. Node 20 is deprecated on GitHub
+  # runners and forced off in June 2026; this opt-in silences the warning
+  # now and is a harmless no-op once Node 24 becomes the default.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Determine next version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # On a repo with no releases this API returns 404; the `|| latest=""`
+          # MUST be outside $() so the error body is never captured as a value.
+          latest=$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.tag_name' 2>/dev/null) || latest=""
+          # Only trust a value that actually looks like vMAJOR.MINOR.PATCH.
+          case "$latest" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) latest="" ;;
+          esac
+          if [ -z "$latest" ]; then
+            version="v0.0.1"
+          else
+            base="${latest#v}"
+            major="${base%%.*}"
+            rest="${base#*.}"
+            minor="${rest%%.*}"
+            patch="${rest##*.}"
+            version="v${major}.${minor}.$((patch + 1))"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Next version: $version"
+
+      - name: Create release and tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.version.outputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "${{ steps.version.outputs.version }}" \
+            --generate-notes
+
+  build-and-push:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=${{ needs.release.outputs.version }}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
