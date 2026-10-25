@@ -14,6 +14,7 @@ from typing import Any, Protocol, cast
 
 from causa.agent.agent import SYSTEM_PROMPT, AgentAnswer, ToolCall
 from causa.agent.tools import TOOL_DEFINITIONS, Toolbox
+from causa.warehouse import metering
 
 MODEL = "gpt-5-nano"
 MAX_OUTPUT_TOKENS = 16000
@@ -107,12 +108,13 @@ class OpenAIInvestigatorAgent:
     def _run(self, name: str, arguments: str) -> ToolCall:
         started = time.perf_counter()
         parsed: dict[str, Any] = {}
-        try:
-            parsed = json.loads(arguments or "{}")
-            output, error = self._tools.call(name, parsed), False
-        except Exception as exc:
-            output, error = f"{type(exc).__name__}: {exc}", True
-        return ToolCall(name, parsed, output, time.perf_counter() - started, error)
+        with metering() as meter:
+            try:
+                parsed = json.loads(arguments or "{}")
+                output, error = self._tools.call(name, parsed), False
+            except Exception as exc:
+                output, error = f"{type(exc).__name__}: {exc}", True
+        return ToolCall(name, parsed, output, time.perf_counter() - started, error, meter.statements, meter.seconds)
 
 
 def _item(o: Any) -> dict[str, Any]:

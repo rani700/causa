@@ -37,6 +37,8 @@ def connection_lost(exc: BaseException) -> bool:
 
 
 class FailoverWarehouse(Warehouse):
+    metered = False  # the backend it delegates to counts the statements
+
     def __init__(
         self,
         primary: Callable[[], Warehouse],

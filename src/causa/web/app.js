@@ -356,7 +356,7 @@ function renderInvestigation(data, m) {
     story = `Of the ${verb} of <strong>${esc(money(Math.abs(t.change), unit, false))}</strong>, <strong class="data">${esc(money(v.data_incident_impact, unit))}</strong> is broken data: ${causes}. ` +
       `The <strong class="biz">real business change is ${esc(money(v.business_change, unit))} (${esc(pct(v.business_change_pct))})</strong>, ${bizUnusual ? "which is unusual" : "within normal variation"}.`;
   }
-  host.appendChild(el("div", { class: "card story" }, story));
+  host.appendChild(el("div", { class: "card story" }, story + costLine(data.cost)));
   host.appendChild(bridge(t.baseline, v.data_incident_impact, v.business_change, t.current, unit));
 
   // Data incidents
@@ -370,6 +370,16 @@ function renderInvestigation(data, m) {
   row.appendChild(businessCard(v, unit));
   row.appendChild(recallCard(data.recalls, unit));
   host.appendChild(row);
+}
+
+// What the answer cost: warehouse work, or nothing when it was prepared earlier.
+function costLine(cost) {
+  if (!cost) return "";
+  const where = (cost.backends || []).map((b) => (b === "exasol" ? "Exasol" : b === "duckdb" ? "the built-in copy" : b)).join(" + ");
+  const text = cost.cached
+    ? "Answered from Causa's cache: no warehouse work for this view."
+    : `Cost of this answer: ${cost.statements} statements on ${esc(where || "the warehouse")}, ${cost.warehouse_seconds}s of database time.`;
+  return `<div class="cost">${text}</div>`;
 }
 
 function bridge(base, dataImpact, biz, current, unit) {
@@ -877,7 +887,7 @@ async function ask() {
     state.conversation = r.conversation_id;
     pending.innerHTML = `<div class="body">${markdown(r.answer)}</div>
       ${r.tool_calls.length ? `<div class="trace">${r.tool_calls.map((c) => `<span class="badge ${c.error ? "unusual" : ""}" title="${esc(JSON.stringify(c.input))}">${esc(c.tool)} · ${c.seconds}s</span>`).join("")}</div>` : ""}
-      <div class="usage">${esc(r.model || "")} · ${r.input_tokens.toLocaleString()} in (${r.cache_read_tokens.toLocaleString()} cached) · ${r.output_tokens.toLocaleString()} out</div>`;
+      <div class="usage">${esc(r.model || "")} · ${r.input_tokens.toLocaleString()} in (${r.cache_read_tokens.toLocaleString()} cached) · ${r.output_tokens.toLocaleString()} out${r.cost_usd != null ? ` · $${r.cost_usd < 0.01 ? r.cost_usd.toFixed(4) : r.cost_usd.toFixed(3)}` : ""}${r.warehouse && r.warehouse.statements ? ` · ${r.warehouse.statements} warehouse statements (${r.warehouse.warehouse_seconds}s)` : ""}</div>`;
   } catch (e) {
     pending.innerHTML = `<div class="card error">${esc(e.message)}</div>`;
   } finally {

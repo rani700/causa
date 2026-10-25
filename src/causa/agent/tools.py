@@ -23,6 +23,7 @@ from causa.metrics.attribution import Attributor, Driver, Explanation, Period, S
 from causa.metrics.definitions import MetricDefinition
 from causa.recall import recall, short_cause
 from causa.verdict import Verdict
+from causa.warehouse import metering
 from causa.workspace import Workspace
 
 log_ = logging.getLogger(__name__)
@@ -257,9 +258,12 @@ class Toolbox:
         return verdict_dict(self._verdict(metric, current, baseline))
 
     def investigate(self, metric: str, current: str, baseline: str | None = None) -> dict[str, Any]:
-        """Verdict and recall from one engine run (not an agent tool: the web UI's main view)."""
-        verdict = self._verdict(metric, current, baseline)
-        return {"verdict": verdict_dict(verdict), **self._recalls(verdict)}
+        """Verdict and recall from one engine run (not an agent tool: the web UI's main view), with
+        what it cost the warehouse (nothing when it was prepared earlier)."""
+        with metering() as meter:
+            verdict = self._verdict(metric, current, baseline)
+            recalls = self._recalls(verdict)
+        return {"verdict": verdict_dict(verdict), **recalls, "cost": meter.as_dict() | {"cached": not meter.statements}}
 
     def health_cases(self, since: str, until: str, min_severity: str = "medium") -> dict[str, Any]:
         start, end = date.fromisoformat(since), date.fromisoformat(until)

@@ -360,3 +360,4 @@ details[open] summary { margin-bottom: 6px; }
   .driver { grid-template-columns: minmax(0, 1fr) 90px 60px; }
   .consumers .hide-sm { display: none; }
 }
+.story .cost { margin-top: 8px; font-size: 12px; color: var(--muted); }

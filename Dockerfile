@@ -17,6 +17,7 @@ RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --no-edi
 # The fallback copy: the simulator is deterministic, so this is the same company Exasol holds.
 # Causa answers from it while Exasol is unreachable (an idle SaaS cluster stops itself).
 COPY causa.yaml /app/causa.yaml
+WORKDIR /app
 RUN CAUSA_BACKEND=duckdb CAUSA_DUCKDB_PATH=/app/data/causa.duckdb /app/.venv/bin/causa sim run
 
 # -- runtime: no build tools, non-root -----------------------------------------------------------

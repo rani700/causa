@@ -322,9 +322,12 @@ def ask(
                     flag = " [red]error[/]" if call.error else ""
                     console.print(f"[dim]  {call.name}({args}) {call.seconds:.1f}s{flag}[/]")
             console.print(answer.text, highlight=False, soft_wrap=True)
+            cost = f", ${answer.cost_usd:.4f}" if answer.cost_usd is not None else ""
+            used = answer.warehouse
             console.print(
                 f"[dim]{answer.model}: {answer.input_tokens:,} in ({answer.cache_read_tokens:,} cached), "
-                f"{answer.output_tokens:,} out[/]"
+                f"{answer.output_tokens:,} out{cost}; warehouse: {used['statements']} statements, "
+                f"{used['warehouse_seconds']}s[/]"
             )
 
 

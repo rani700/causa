@@ -436,3 +436,18 @@ def test_health_ready_and_warm_up(ws) -> None:
     finally:
         ws.wh.query = original  # type: ignore[method-assign]
     assert not any("CAUSA_REPLAY" in sql for sql in calls)
+
+
+def test_answers_report_what_they_cost(ws) -> None:
+    from causa.agent.pricing import usd
+
+    tb = Toolbox(ws)
+    ws._replays.clear()
+    first = tb.investigate("net_revenue", f"{day(70)}..{day(76)}")["cost"]
+    assert first["statements"] > 0 and first["backends"] == ["duckdb"] and not first["cached"]
+    again = tb.investigate("net_revenue", f"{day(70)}..{day(76)}")["cost"]
+    assert again == {"statements": 0, "warehouse_seconds": 0.0, "backends": [], "cached": True}
+
+    # 12,824 input tokens (6,656 cached) and 8,264 output on gpt-5-nano: the live Exasol run
+    assert round(usd("gpt-5-nano-2025-08-07", 12_824, 6_656, 8_264), 5) == 0.00365
+    assert usd("claude-opus-5-5", 1, 0, 1) is None  # unknown price: tokens only

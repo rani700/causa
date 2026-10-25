@@ -46,6 +46,8 @@ class AskResponse(BaseModel):
     input_tokens: int
     output_tokens: int
     cache_read_tokens: int
+    cost_usd: float | None = None
+    warehouse: dict[str, Any] = {}
 
 
 def create_app(
@@ -229,13 +231,21 @@ def create_app(
             conversation_id=conversation_id,
             answer=answer.text,
             tool_calls=[
-                {"tool": c.name, "input": c.input, "seconds": round(c.seconds, 2), "error": c.error}
+                {
+                    "tool": c.name,
+                    "input": c.input,
+                    "seconds": round(c.seconds, 2),
+                    "error": c.error,
+                    "statements": c.statements,
+                }
                 for c in answer.tool_calls
             ],
             model=answer.model,
             input_tokens=answer.input_tokens,
             output_tokens=answer.output_tokens,
             cache_read_tokens=answer.cache_read_tokens,
+            cost_usd=answer.cost_usd,
+            warehouse=answer.warehouse,
         )
 
     return app

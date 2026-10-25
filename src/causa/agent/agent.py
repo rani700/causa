@@ -14,7 +14,9 @@ from typing import Any, Protocol, cast
 
 import anthropic
 
+from causa.agent.pricing import usd
 from causa.agent.tools import TOOL_DEFINITIONS, Toolbox
+from causa.warehouse import metering
 
 MODEL = "claude-opus-5-5"
 MAX_TOKENS = 16000
@@ -68,6 +70,8 @@ class ToolCall:
     output: str
     seconds: float
     error: bool = False
+    statements: int = 0  # warehouse statements the tool ran
+    warehouse_seconds: float = 0.0
 
 
 @dataclass
@@ -79,6 +83,17 @@ class AgentAnswer:
     input_tokens: int = 0
     output_tokens: int = 0
     cache_read_tokens: int = 0
+
+    @property
+    def cost_usd(self) -> float | None:
+        return usd(self.model, self.input_tokens, self.cache_read_tokens, self.output_tokens)
+
+    @property
+    def warehouse(self) -> dict[str, Any]:
+        return {
+            "statements": sum(c.statements for c in self.tool_calls),
+            "warehouse_seconds": round(sum(c.warehouse_seconds for c in self.tool_calls), 2),
+        }
 
 
 class InvestigatorAgent:
@@ -145,11 +160,12 @@ class InvestigatorAgent:
 
     def _run(self, name: str, arguments: dict[str, Any]) -> ToolCall:
         started = time.perf_counter()
-        try:
-            output, error = self._tools.call(name, arguments), False
-        except Exception as exc:
-            output, error = f"{type(exc).__name__}: {exc}", True
-        return ToolCall(name, arguments, output, time.perf_counter() - started, error)
+        with metering() as meter:
+            try:
+                output, error = self._tools.call(name, arguments), False
+            except Exception as exc:
+                output, error = f"{type(exc).__name__}: {exc}", True
+        return ToolCall(name, arguments, output, time.perf_counter() - started, error, meter.statements, meter.seconds)
 
 
 def _add_usage(answer: AgentAnswer, response: Any) -> None:
