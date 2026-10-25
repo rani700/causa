@@ -369,3 +369,52 @@ def test_provider_follows_the_configured_keys(monkeypatch: pytest.MonkeyPatch) -
     assert agent_provider(Settings()) is AgentProvider.ANTHROPIC  # auto prefers Claude
     monkeypatch.setenv("CAUSA_AGENT_PROVIDER", "openai")
     assert agent_provider(Settings()) is AgentProvider.OPENAI
+
+
+def test_pages_load_while_the_agent_thinks(ws) -> None:
+    import threading
+
+    from causa.agent import AgentAnswer
+
+    thinking, done = threading.Event(), threading.Event()
+
+    class SlowAgent:
+        def __init__(self, toolbox: Toolbox) -> None:
+            self.toolbox = toolbox
+
+        def ask(self, question: str) -> AgentAnswer:
+            self.toolbox.call("list_metrics", {})  # tools still go through the warehouse lock
+            thinking.set()
+            assert done.wait(10)  # the model is "thinking"
+            return AgentAnswer(text="ok")
+
+    client = TestClient(create_app(ws, agent_factory=SlowAgent))
+    asking = threading.Thread(target=lambda: client.post("/ask", json={"question": "slow?"}))
+    asking.start()
+    assert thinking.wait(10)
+    page = client.get(f"/metrics/net_revenue/series?since={day(70)}&until={day(76)}")
+    assert page.status_code == 200 and len(page.json()["points"]) == 7
+    done.set()
+    asking.join(10)
+
+
+def test_new_activity_in_the_log_refreshes_the_workspace() -> None:
+    wh = DuckDBWarehouse(":memory:")
+    run_simulation(small_scenario(days=10), wh)
+    fresh = Workspace(wh)
+    tb = Toolbox(fresh)
+    graph, before = fresh.graph, fresh.today
+    tb.judge_change("net_revenue", str(START + timedelta(days=8)))
+    assert tb.keep_fresh(every=0) is False and fresh.graph is graph  # nothing new: nothing reloaded
+    assert len(tb._verdicts) == 1
+
+    # a new statement lands in the query log (as a nightly load would)
+    wh.execute(
+        "INSERT INTO OPS.QUERY_LOG SELECT SESSION_ID, STMT_ID + 1000000, CLIENT, USER_NAME, COMMAND_NAME, "
+        "SQL_TEXT, START_TIME + INTERVAL '1' DAY, STOP_TIME + INTERVAL '1' DAY, DURATION, SUCCESS, ROW_COUNT, "
+        "ERROR_TEXT FROM OPS.QUERY_LOG WHERE START_TIME = (SELECT MAX(START_TIME) FROM OPS.QUERY_LOG)"
+    )
+    assert tb.keep_fresh(every=0) is True
+    assert fresh.graph is not graph and fresh.today == before + timedelta(days=1)
+    assert not tb._verdicts  # answers computed on the old data are gone
+    wh.close()

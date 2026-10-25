@@ -14,10 +14,9 @@ import itertools
 import logging
 from datetime import datetime
 
-from causa import store
 from causa.health.models import TableMonitor
 from causa.lineage import LineageGraph
-from causa.sources.catalog import Catalog
+from causa.sources.catalog import NOT_COMPANY_SCHEMAS, Catalog
 from causa.sqlutil import ts
 from causa.warehouse import Warehouse
 
@@ -33,7 +32,7 @@ LOAD_COLUMNS = (
     "INSERTED_AT",
 )
 SEGMENT_HINTS = ("SOURCE_FEED", "SOURCE", "FEED", "CONNECTOR", "SOURCE_SYSTEM", "CURRENCY", "REGION", "COUNTRY")
-EXCLUDED_SCHEMAS = store.SCHEMAS | {"SIM", "OPS", "SYS", "EXA_STATISTICS"}
+EXCLUDED_SCHEMAS = NOT_COMPANY_SCHEMAS
 MAX_SEGMENTS = 50
 KEY_BAD_DAY_SHARE = 0.1  # a key may repeat on a few days: those are the incidents we look for
 _TEMPORAL = ("TIMESTAMP", "DATE")

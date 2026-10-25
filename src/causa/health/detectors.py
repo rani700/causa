@@ -87,11 +87,11 @@ def detect(series: pl.DataFrame, since: date, until: date, sensitivity: Sensitiv
         if signal is Signal.VOLUME:
             group = _densify_volume(group, until)
         ser = _Series(
-            table,  # type: ignore[arg-type]
-            seg_col,  # type: ignore[arg-type]
-            segment,  # type: ignore[arg-type]
+            table,
+            seg_col,
+            segment,
             signal,
-            column,  # type: ignore[arg-type]
+            column,
             group["day"].to_numpy().astype("datetime64[D]"),
             group["value"].to_numpy().astype(float),
             group["n"].to_numpy().astype(float),
@@ -101,7 +101,7 @@ def detect(series: pl.DataFrame, since: date, until: date, sensitivity: Sensitiv
             continue
         lo, hi = np.datetime64(since, "D"), np.datetime64(until, "D")
         for i in np.flatnonzero((ser.days >= lo) & (ser.days <= hi)):
-            found = detector(ser, i, s)
+            found = detector(ser, int(i), s)
             if found:
                 observed, expected, z = found
                 anomalies.append(
@@ -221,10 +221,10 @@ def to_incidents(anomalies: list[Anomaly], segment_columns: dict[str, str | None
         run: list[Anomaly] = []
         for a in items:
             if run and a.day - run[-1].day > timedelta(days=MAX_GAP_DAYS + 1):
-                incidents.append(_incident(run, segment_columns.get(table)))  # type: ignore[arg-type]
+                incidents.append(_incident(run, segment_columns.get(str(table))))
                 run = []
             run.append(a)
-        incidents.append(_incident(run, segment_columns.get(table)))  # type: ignore[arg-type]
+        incidents.append(_incident(run, segment_columns.get(str(table))))
     return sorted(incidents, key=lambda x: (x.start, -abs(x.peak_score)))
 
 

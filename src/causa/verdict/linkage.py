@@ -71,8 +71,14 @@ def link_case(
 
     depth = {i.table: len(graph.upstream_tables(i.table)) for i in segmented}
     root = min(segmented, key=lambda i: (depth[i.table], -abs(i.peak_score)))
-    values = tuple(
-        sorted({i.segment for i in segmented if (i.table, i.segment_column) == (root.table, root.segment_column)})  # type: ignore[misc]
+    values: tuple[str, ...] = tuple(
+        sorted(
+            {
+                i.segment
+                for i in segmented
+                if i.segment and (i.table, i.segment_column) == (root.table, root.segment_column)
+            }
+        )
     )
     column = root.segment_column
     assert column is not None

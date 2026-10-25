@@ -70,7 +70,7 @@ def _split(b: Brief) -> str:
     )
 
 
-def _finding_line(b: Brief, r: Recall | None, f) -> str:  # type: ignore[no-untyped-def]
+def _finding_line(b: Brief, r: Recall | None, f) -> str:
     method = "replayed" if f.estimate.method.startswith("counterfactual") else f.estimate.method.split(":")[0]
     line = f"{short_cause(f)}: {money(f.estimate.impact, b.unit)} ({method}, confidence {f.confidence:.0%})"
     if r is not None:

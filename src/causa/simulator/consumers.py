@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
+from functools import partial
 
 import numpy as np
 
@@ -78,13 +79,13 @@ class Workloads:
             jobs.append((t, lambda t: self.exec_dashboard(t, day)))
         for t in business_hours(rng.poisson(4 if weekday else 0.5)):
             region = str(rng.choice(REGIONS))
-            jobs.append((t, lambda t, r=region: self.region_dashboard(t, day, r)))
+            jobs.append((t, partial(self.region_dashboard, day=day, region=region)))
         for t in business_hours(rng.poisson(2 if weekday else 0.2)):
             jobs.append((t, lambda t: self.product_mix(t, day)))
         for t in business_hours(rng.poisson(3 if weekday else 0)):
             user = str(rng.choice(ANALYSTS))
             template = int(rng.integers(0, 3))
-            jobs.append((t, lambda t, u=user, k=template: self.analyst(t, day, u, k)))
+            jobs.append((t, partial(self.analyst, day=day, user=user, template=template)))
         return jobs
 
     # -- workloads ---------------------------------------------------------------------------

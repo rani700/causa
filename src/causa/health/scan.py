@@ -6,6 +6,7 @@ import itertools
 import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
+from typing import cast
 
 import polars as pl
 
@@ -137,7 +138,7 @@ class HealthScanner:
                 )
                 if firsts.height > MAX_CATEGORIES or firsts.is_empty():
                     continue
-                if firsts["first_day"].min() >= since:  # no history before the window to compare against
+                if cast(date, firsts["first_day"].min()) >= since:  # no history before the window to compare against
                     continue
                 for row in firsts.filter(pl.col("first_day") >= since).iter_rows(named=True):
                     out.append(
@@ -239,10 +240,10 @@ class HealthScanner:
                 out.append(
                     HealthIncident(
                         signal=Signal.STALENESS,
-                        table=table,  # type: ignore[arg-type]
+                        table=table,
                         column=None,
-                        segment=None if segment == "*" else segment,  # type: ignore[arg-type]
-                        segment_column=segment_columns.get(table),  # type: ignore[arg-type]
+                        segment=None if segment == "*" else segment,
+                        segment_column=segment_columns.get(table),
                         start=days[-1] + timedelta(days=1),
                         end=None,
                         peak_score=float(silent) / cadence,

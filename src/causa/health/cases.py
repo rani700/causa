@@ -43,7 +43,7 @@ def build_cases(incidents: list[HealthIncident], graph: LineageGraph, window: in
     related = {
         i.table: {i.table, *graph.upstream_tables(i.table), *graph.downstream_tables(i.table)} for i in incidents
     }
-    links = nx.Graph()
+    links: nx.Graph[int] = nx.Graph()
     links.add_nodes_from(range(len(incidents)))
     for a, x in enumerate(incidents):
         for b in range(a + 1, len(incidents)):

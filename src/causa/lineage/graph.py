@@ -111,7 +111,7 @@ def column_id(ref: ColumnRef) -> str:
 
 class LineageGraph:
     def __init__(self) -> None:
-        self.g = nx.DiGraph()
+        self.g: nx.DiGraph[str] = nx.DiGraph()
         self.schema_changes: list[SchemaChange] = []
         self.parse_errors: dict[str, str] = {}
         self.join_pairs: set[tuple[ColumnRef, ColumnRef]] = set()
@@ -187,7 +187,7 @@ class LineageGraph:
     def _predecessors(self, node: str, kind: EdgeKind) -> Iterable[str]:
         return (u for u in self.g.predecessors(node) if self.g.edges[u, node]["kind"] == kind)
 
-    def _walk(self, start: str, step) -> list[str]:  # type: ignore[no-untyped-def]
+    def _walk(self, start: str, step) -> list[str]:
         seen: list[str] = []
         stack = [start]
         while stack:

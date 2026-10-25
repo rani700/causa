@@ -7,7 +7,7 @@ test:
 	uv run pytest -q
 
 lint:
-	uv run ruff check src tests && uv run ruff format --check src tests
+	uv run ruff check src tests && uv run ruff format --check src tests && uv run mypy src
 
 sim:
 	uv run causa sim run

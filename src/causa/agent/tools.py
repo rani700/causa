@@ -7,6 +7,8 @@ anything; they return what the engines measured, rounded, with the method that p
 from __future__ import annotations
 
 import json
+import threading
+import time
 from collections import OrderedDict
 from collections.abc import Callable
 from datetime import date, timedelta
@@ -23,6 +25,7 @@ from causa.verdict import Verdict
 from causa.workspace import Workspace
 
 MAX_SQL_ROWS = 50
+REFRESH_SECONDS = 300  # how often a long-running server checks the query log for new activity
 VERDICT_CACHE = 32  # investigations remembered per toolbox (a week takes seconds on a remote warehouse)
 
 
@@ -128,8 +131,12 @@ def verdict_dict(v: Verdict) -> dict[str, Any]:
 class Toolbox:
     """Binds the tools to one workspace. ``call(name, input)`` returns a JSON string."""
 
-    def __init__(self, ws: Workspace) -> None:
+    def __init__(self, ws: Workspace, lock: threading.RLock | None = None) -> None:
         self.ws = ws
+        # One warehouse connection: engine work is serialised. Agents call tools through ``call``,
+        # so the lock is held while a tool runs, never while the model is thinking.
+        self.lock = lock or threading.RLock()
+        self._checked = time.monotonic()
         # The workspace pins one snapshot of the query log, lineage and health, so a verdict for the
         # same question cannot change while it lives: judge, recall and the web UI share one run.
         self._verdicts: OrderedDict[tuple[str, Period, Period], Verdict] = OrderedDict()
@@ -147,7 +154,9 @@ class Toolbox:
         handler = self._handlers.get(name)
         if handler is None:
             raise ValueError(f"unknown tool {name!r}")
-        return json.dumps(handler(**arguments), default=str)
+        with self.lock:
+            self.keep_fresh()
+            return json.dumps(handler(**arguments), default=str)
 
     # -- helpers -----------------------------------------------------------------------------
 
@@ -158,10 +167,21 @@ class Toolbox:
         cur = Period.parse(current)
         return cur, Period.parse(baseline) if baseline else cur.same_weekdays_before()
 
+    def keep_fresh(self, every: float = REFRESH_SECONDS) -> bool:
+        """At most every ``every`` seconds, reload if the warehouse has new activity (call under the lock)."""
+        if time.monotonic() - self._checked < every:
+            return False
+        self._checked = time.monotonic()
+        if not self.ws.refresh():
+            return False
+        self._verdicts.clear()
+        return True
+
     def context(self) -> str:
         """Opens a conversation: the date and the exact metric names, so no turn is spent guessing."""
-        names = ", ".join(m.name for m in self.ws.config.metrics)
-        return f"(Today is {self.ws.today}. Metrics: {names}.)"
+        with self.lock:
+            names = ", ".join(m.name for m in self.ws.config.metrics)
+            return f"(Today is {self.ws.today}. Metrics: {names}.)"
 
     # -- tools -------------------------------------------------------------------------------
 

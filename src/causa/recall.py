@@ -87,7 +87,7 @@ def short_cause(finding: DataFinding) -> str:
 
     link = finding.link
 
-    def where(i):  # type: ignore[no-untyped-def]
+    def where(i):
         if i.segment_column and i.segment_column == link.segment_column and len(link.segment_values) > 1:
             return f" across {len(link.segment_values)} {i.segment_column} values ({', '.join(link.segment_values)})"
         return f" for {i.segment_column}={i.segment}" if i.segment else ""

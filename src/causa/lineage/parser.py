@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from typing import cast
 
 import sqlglot
 from sqlglot import exp
@@ -82,21 +83,21 @@ def parse_statement(sql: str, catalog: Catalog) -> ParsedStatement:
         return ParsedStatement(command, error=f"analyse: {type(exc).__name__}: {exc}"[:500])
 
 
-def _is_relation(tree: exp.Expression) -> bool:
+def _is_relation(tree: exp.Expr) -> bool:
     """CREATE/DROP/ALTER of a table or view (not of a schema, user, role, function, ...)."""
     kind = (tree.args.get("kind") or "TABLE").upper()
     return kind in ("TABLE", "VIEW") and isinstance(_relation(tree), exp.Table | exp.Schema)
 
 
-def _relation(tree: exp.Expression) -> exp.Expression | None:
+def _relation(tree: exp.Expr) -> exp.Expr | None:
     tables = tree.args.get("tables")  # DROP keeps its object list here
     return tables[0] if tables else tree.this
 
 
-def _parse_tree(command: str, tree: exp.Expression, catalog: Catalog) -> ParsedStatement:
+def _parse_tree(command: str, tree: exp.Expr, catalog: Catalog) -> ParsedStatement:
 
     stmt = ParsedStatement(command)
-    select: exp.Expression | None = None
+    select: exp.Expr | None = None
     target_columns: list[str] | None = None
 
     match tree:
@@ -119,7 +120,7 @@ def _parse_tree(command: str, tree: exp.Expression, catalog: Catalog) -> ParsedS
         case exp.TruncateTable():
             stmt.target, stmt.target_kind = table_name(tree.expressions[0]), "table"
         case exp.Drop() if _is_relation(tree):
-            stmt.target, stmt.ddl = table_name(_relation(tree)), "DROP"
+            stmt.target, stmt.ddl = table_name(cast(exp.Table, _relation(tree))), "DROP"
         case exp.Delete() | exp.Update() | exp.Merge():
             stmt.target, stmt.target_kind = table_name(tree.this), "table"
             select = tree
@@ -151,7 +152,9 @@ def _analyse_query(
 ) -> None:
     schema = catalog.mapping
     try:
-        qualified = qualify(query.copy(), schema=schema, dialect=DIALECT, validate_qualify_columns=False)
+        qualified = qualify(
+            query.copy(), schema=cast(dict[str, object], schema), dialect=DIALECT, validate_qualify_columns=False
+        )
     except SqlglotError as exc:
         stmt.error = f"qualify: {exc}"[:500]
         qualified = query
@@ -174,10 +177,10 @@ def _analyse_query(
                         )
                         stmt.join_pairs.add((pair[0], pair[1]))
         for column in scope.columns:
-            source = scope.sources.get(column.table)
-            if not isinstance(source, exp.Table):
+            origin = scope.sources.get(column.table)
+            if not isinstance(origin, exp.Table):
                 continue
-            ref = ColumnRef(table_name(source), column.name.upper())
+            ref = ColumnRef(table_name(origin), column.name.upper())
             stmt.reads.add(ref)
             if column.find_ancestor(exp.Where, exp.Join, exp.Group, exp.Having) is not None:
                 stmt.gating.add(ref)
@@ -192,7 +195,7 @@ def _analyse_query(
 
 
 def _column_sources(
-    name: str, query: exp.Query, projection: exp.Expression, schema: dict[str, dict[str, dict[str, str]]]
+    name: str, query: exp.Query, projection: exp.Expr, schema: dict[str, dict[str, dict[str, str]]]
 ) -> set[ColumnRef]:
     try:
         root = lineage(name, query, schema=schema, dialect=DIALECT)

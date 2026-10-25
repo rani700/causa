@@ -7,7 +7,7 @@ from causa.metrics.snapshots import TOTAL
 from causa.verdict.classifier import DataFinding, Verdict
 
 
-def _span(days: list) -> str:  # type: ignore[type-arg]
+def _span(days: list) -> str:
     if not days:
         return "-"
     return str(days[0]) if len(days) == 1 else f"{days[0]} .. {days[-1]}"

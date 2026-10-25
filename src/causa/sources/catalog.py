@@ -4,7 +4,20 @@ from dataclasses import dataclass, field
 
 import polars as pl
 
+from causa import store
 from causa.warehouse import Warehouse
+
+# Schemas that hold no company data flow: Exasol's system objects, Causa's own state, and the
+# simulator's bookkeeping (its query log and the ground truth Causa must never see).
+NOT_COMPANY_SCHEMAS = store.SCHEMAS | {"SYS", "EXA_STATISTICS", "SIM", "OPS"}
+
+
+def is_company_table(name: str) -> bool:
+    """False for system objects (incl. unqualified EXA_* views and $-internal tables) and the above."""
+    schema, _, table = name.upper().rpartition(".")
+    if schema in NOT_COMPANY_SCHEMAS or schema.startswith("$") or table.startswith("$"):
+        return False
+    return bool(schema) or not table.startswith("EXA_")
 
 
 @dataclass

@@ -6,7 +6,7 @@ import time
 from datetime import date, datetime, timedelta
 from datetime import time as dtime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, cast
 
 import typer
 from rich.console import Console
@@ -446,12 +446,11 @@ def eval_verdict(
         log_frame = TableQueryLog(wh).fetch()
         catalog = Catalog.load(wh)
         graph = build_lineage(log_frame, catalog)
-        first, last = events["start_date"].min(), events["start_date"].max()
+        first = cast(date, events["start_date"].min())
+        last = cast(date, events["start_date"].max())
         with console.status("Scanning health once for all windows"):
             report = HealthScanner(wh, catalog, graph).scan(
-                first - timedelta(days=7),
-                last + timedelta(days=10),
-                log_frame,  # type: ignore[operator]
+                first - timedelta(days=7), last + timedelta(days=10), log_frame
             )
         investigator = Investigator(wh, catalog, graph, log_frame, report, replay=replay)
         for ev in events.iter_rows(named=True):

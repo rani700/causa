@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import threading
 import uuid
-from collections.abc import Callable
-from datetime import date
+from collections import OrderedDict
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from datetime import date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -22,6 +24,7 @@ from causa.sqlutil import dt
 from causa.workspace import Workspace
 
 WEB = Path(__file__).parent / "web"
+MAX_CONVERSATIONS = 200  # most recent first; older ones are forgotten
 
 
 class AskRequest(BaseModel):
@@ -41,16 +44,24 @@ class AskResponse(BaseModel):
 
 def create_app(workspace: Workspace, agent_factory: Callable[[Toolbox], Agent] | None = None) -> FastAPI:
     app = FastAPI(title="Causa", summary="Root-cause engine for business metrics")
-    toolbox = Toolbox(workspace)
-    lock = threading.Lock()  # one warehouse connection: serialise engine work
-    conversations: dict[str, Agent] = {}
+    lock = threading.RLock()  # one warehouse connection: serialise engine work, never model calls
+    toolbox = Toolbox(workspace, lock)
+    conversations: OrderedDict[str, tuple[Agent, threading.Lock]] = OrderedDict()
+    registry = threading.Lock()
     new_agent = agent_factory or make_agent
     provider = agent_provider()
     agent_available = agent_factory is not None or provider is not None
 
+    @contextmanager
+    def engine() -> Iterator[None]:
+        """Engine work: one at a time, on data no older than the toolbox's refresh interval."""
+        with lock:
+            toolbox.keep_fresh()
+            yield
+
     def run(name: str, **arguments: Any) -> Any:
         try:
-            with lock:
+            with engine():
                 return getattr(toolbox, name)(**arguments)
         except KeyError as exc:
             raise HTTPException(404, str(exc)) from exc
@@ -65,9 +76,9 @@ def create_app(workspace: Workspace, agent_factory: Callable[[Toolbox], Agent] |
 
     @app.get("/status")
     def status() -> Any:
-        with lock:
+        with engine():
             metrics = toolbox.list_metrics()
-            first = workspace.query_log["start_time"].min()
+            first = cast("datetime | None", workspace.query_log["start_time"].min())
         return {
             "backend": workspace.wh.name,
             "query_log": "Exasol audit log" if workspace.query_log_table == "audit" else workspace.query_log_table,
@@ -95,7 +106,7 @@ def create_app(workspace: Workspace, agent_factory: Callable[[Toolbox], Agent] |
             f"SELECT {m.time_column} AS D, SUM({m.measure_column}) AS V FROM {m.table} WHERE {where} "
             f"GROUP BY {m.time_column} ORDER BY {m.time_column}"
         )
-        with lock:
+        with engine():
             frame = workspace.wh.query(sql)
         return {"metric": m.name, "unit": m.unit, "points": [[str(d), float(v or 0)] for d, v in frame.iter_rows()]}
 
@@ -121,12 +132,12 @@ def create_app(workspace: Workspace, agent_factory: Callable[[Toolbox], Agent] |
 
     @app.get("/lineage-map")
     def lineage_map() -> Any:
-        with lock:
+        with engine():
             return lineage_map_dict(workspace.graph)
 
     @app.get("/lineage/{table}/impact")
     def impact(table: str, since: str | None = None, until: str | None = None) -> Any:
-        with lock:
+        with engine():
             result = workspace.graph.impact(
                 table.upper(),
                 date.fromisoformat(since) if since else None,
@@ -156,7 +167,7 @@ def create_app(workspace: Workspace, agent_factory: Callable[[Toolbox], Agent] |
 
     @app.get("/metrics/{metric}/brief")
     def brief(metric: str, day: str | None = None, format: str = "text") -> Any:
-        with lock:
+        with engine():
             b = morning_brief(workspace, metric, date.fromisoformat(day) if day else None)
         return to_slack(b) if format == "slack" else {"text": to_text(b)}
 
@@ -165,10 +176,16 @@ def create_app(workspace: Workspace, agent_factory: Callable[[Toolbox], Agent] |
         if not agent_available:
             raise HTTPException(503, NO_KEY)
         conversation_id = request.conversation_id or uuid.uuid4().hex
-        agent = conversations.get(conversation_id)
-        if agent is None:
-            agent = conversations[conversation_id] = new_agent(toolbox)
-        with lock:
+        with registry:
+            if conversation_id not in conversations:
+                conversations[conversation_id] = (new_agent(toolbox), threading.Lock())
+                if len(conversations) > MAX_CONVERSATIONS:
+                    conversations.popitem(last=False)
+            conversations.move_to_end(conversation_id)
+            agent, turn = conversations[conversation_id]
+        # One question at a time per conversation; the toolbox takes the warehouse lock per tool call,
+        # so other visitors' pages keep loading while the model thinks.
+        with turn:
             answer = agent.ask(request.question)
         return AskResponse(
             conversation_id=conversation_id,

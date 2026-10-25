@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+import polars as pl
 import pytest
 
 from causa.lineage import LineageGraph, build_lineage
@@ -169,3 +170,23 @@ def test_impact_window_filters_readers(graph: LineageGraph) -> None:
     window = graph.impact("RAW.SHOP_ORDERS", since=sunday, until=sunday)
     assert "Weekly Board Pack" not in {a.name for a in window.actors}
     assert all(a.last_read is None or a.last_read.date() == sunday for a in window.actors)
+
+
+def test_system_objects_and_causas_tables_are_not_lineage(warehouse, catalog: Catalog) -> None:
+    from causa.sources.catalog import is_company_table
+
+    log = TableQueryLog(warehouse).fetch()
+    noise = [
+        "SELECT * FROM EXA_ALL_SESSIONS",  # Exasol's monitoring, unqualified system view
+        "SELECT * FROM SYS.EXA_DBA_TABLES",
+        'SELECT * FROM "$EXA_PROFILE_HOURLY"',
+        "SELECT * FROM CAUSA.METRIC_SNAPSHOTS",
+        "SELECT o.ORDER_ID FROM STG.ORDERS o JOIN SYS.EXA_DBA_TABLES t ON 1 = 1",  # company part kept
+    ]
+    extra = pl.concat([log.head(1).with_columns(sql_text=pl.lit(sql)) for sql in noise])
+    graph = build_lineage(pl.concat([log, extra]), catalog)
+    tables = {d["name"] for _, d in graph.g.nodes(data=True) if d["type"] == "table"}
+    assert all(is_company_table(t) for t in tables)
+    assert "STG.ORDERS" in tables
+    assert not is_company_table("CAUSA_REPLAY.R1_X") and not is_company_table("EXA_SQL_DAILY")
+    assert is_company_table("MART.EXA_LIKE_NAME")  # a company table may start with EXA_ inside a schema

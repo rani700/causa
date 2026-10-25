@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from causa.agent.agent import SYSTEM_PROMPT, AgentAnswer, ToolCall
 from causa.agent.tools import TOOL_DEFINITIONS, Toolbox
@@ -52,9 +52,9 @@ class OpenAIInvestigatorAgent:
         if responses_client is None:
             import openai
 
-            responses_client = openai.OpenAI(api_key=api_key).responses
+            responses_client = cast(ResponsesClient, openai.OpenAI(api_key=api_key).responses)
         self._tools = toolbox
-        self._responses = responses_client
+        self._responses: ResponsesClient = responses_client
         self._model = model
         self._effort = EFFORT.get(effort, "medium")
         self._max_turns = max_turns

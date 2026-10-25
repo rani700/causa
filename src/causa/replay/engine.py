@@ -187,19 +187,19 @@ class Replayer:
                     )
         for i in by_depth:
             if i.signal is Signal.VALUE_SHIFT and not i.evidence.get("mix_sensitive") and i.column and i.segment:
-                m = monitors.get(i.table)
-                if m and m.event_column and m.segment_column:
-                    replacements = self._interpolate(i, m.event_column, m.segment_column)
+                mon = monitors.get(i.table)
+                if mon and mon.event_column and mon.segment_column:
+                    replacements = self._interpolate(i, mon.event_column, mon.segment_column)
                     if replacements:
                         return Interpolate(
                             "interpolate reference value",
                             i.table,
-                            f"{i.column} for {m.segment_column}={i.segment} interpolated between the last good "
+                            f"{i.column} for {mon.segment_column}={i.segment} interpolated between the last good "
                             f"value before and the first good value after",
                             value_column=i.column,
-                            segment_column=m.segment_column,
+                            segment_column=mon.segment_column,
                             segment_value=i.segment,
-                            event_column=m.event_column,
+                            event_column=mon.event_column,
                             replacements=replacements,
                         )
         signals = sorted({i.signal.value for i in incidents})

@@ -12,6 +12,7 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
+from functools import partial
 
 import polars as pl
 
@@ -213,7 +214,7 @@ def run_simulation(
     scenario: Scenario,
     wh: Warehouse,
     on_day: Callable[[date], None] | None = None,
-    on_loaded: Callable[[date], None] | None = None,
+    on_loaded: Callable[[date], object] | None = None,
 ) -> SimulationResult:
     """``on_loaded(day)`` runs right after the nightly ETL for ``day`` (before anyone reads the data);
     ``on_day(day)`` runs once the following business day is over."""
@@ -243,7 +244,7 @@ def run_simulation(
         jobs = workloads.day_jobs(night)
         if night in recoveries:
             failure = recoveries[night]
-            jobs.append((datetime.combine(night, time(10, 12)), lambda t, f=failure: pipe.recover(f, t)))
+            jobs.append((datetime.combine(night, time(10, 12)), partial(pipe.recover, failure)))
         for at, job in sorted(jobs, key=lambda j: j[0]):
             job(at)
         if on_day:

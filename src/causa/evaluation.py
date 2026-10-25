@@ -122,7 +122,7 @@ class VerdictResult:
 def true_data_gap(wh: Warehouse, metric_column: str, current: object, baseline: object) -> tuple[float, float]:
     """(reported change, reported change - true change) from the simulator's ground truth."""
 
-    def total(table: str, period) -> float:  # type: ignore[no-untyped-def]
+    def total(table: str, period) -> float:
         value = wh.scalar(
             f"SELECT SUM({metric_column}) FROM {table} WHERE ORDER_DATE BETWEEN DATE '{period.start}' "
             f"AND DATE '{period.end}'"

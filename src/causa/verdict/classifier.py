@@ -253,9 +253,9 @@ class Investigator:
         # nothing to scale up from, so the statistical estimate is used instead.
         partial_nulls = [i for i in incidents if i.signal is Signal.NULL_RATE and i.observed < 0.95]
         if partial_nulls:
-            estimate = self._row_loss(metric, link, series, partial_nulls[0], days, report, lags)
-            if estimate is not None:
-                return estimate, statistical
+            row_loss = self._row_loss(metric, link, series, partial_nulls[0], days, report, lags)
+            if row_loss is not None:
+                return row_loss, statistical
         return statistical, None
 
     def _replay_findings(
@@ -407,7 +407,7 @@ def _business_days(case: HealthCase, lags: dict[str, int]) -> set[date]:
     return days
 
 
-def _daily_values(report, incident: HealthIncident, lags, transform) -> dict[date, float]:  # type: ignore[no-untyped-def]
+def _daily_values(report, incident: HealthIncident, lags, transform) -> dict[date, float]:
     s = report.series.filter(
         (pl.col("signal") == incident.signal.value)
         & (pl.col("table") == incident.table)

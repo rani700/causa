@@ -61,10 +61,12 @@ def test_audit_log_leaves_out_causas_own_work() -> None:
         3: "causa-mcp 3.0.0",  # Causa behind Claude Desktop / Claude Code
         4: "causa-simulator 3.0.0",  # the simulated company's own workload: kept
         5: None,
+        6: "proust",  # Exasol SaaS's own monitor, as EXA_PROUST_MONITOR
     }
     for sid, client in sessions.items():
         value = f"'{client}'" if client else "NULL"
-        wh.execute(f"INSERT INTO EXA_STATISTICS.EXA_DBA_AUDIT_SESSIONS VALUES ({sid}, {value}, 'U')")
+        user = "EXA_PROUST_MONITOR" if sid == 6 else "SHWETA"
+        wh.execute(f"INSERT INTO EXA_STATISTICS.EXA_DBA_AUDIT_SESSIONS VALUES ({sid}, {value}, '{user}')")
     statements = [
         (1, "SELECT * FROM RPT.V_EXEC_REVENUE_DAILY"),
         (2, "SELECT * FROM MART.FCT_ORDER_LINES"),
@@ -72,6 +74,7 @@ def test_audit_log_leaves_out_causas_own_work() -> None:
         (4, "INSERT INTO MART.DAILY_REVENUE SELECT * FROM MART.FCT_ORDER_LINES"),
         (5, "SELECT 1"),
         (1, "SELECT * FROM causa_replay.R1_MART__FCT_ORDER_LINES"),  # anyone touching Causa's scratch tables
+        (6, "SELECT * FROM DB_METADATA"),
     ]
     for i, (sid, sql) in enumerate(statements):
         wh.execute(

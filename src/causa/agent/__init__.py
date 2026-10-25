@@ -6,7 +6,9 @@ Two providers share one toolbox, one prompt and one audit trail: Claude (``agent
 
 from __future__ import annotations
 
-from causa.agent.agent import AgentAnswer, InvestigatorAgent
+from typing import cast
+
+from causa.agent.agent import AgentAnswer, InvestigatorAgent, MessagesClient
 from causa.agent.openai_agent import OpenAIInvestigatorAgent
 from causa.agent.tools import TOOL_DEFINITIONS, Toolbox
 from causa.config import AgentProvider, Settings, get_settings
@@ -39,7 +41,8 @@ def make_agent(toolbox: Toolbox, settings: Settings | None = None, effort: str |
 
         assert s.anthropic_api_key is not None
         client = anthropic.Anthropic(api_key=s.anthropic_api_key.get_secret_value())
-        return InvestigatorAgent(toolbox, messages_client=client.beta.messages, effort=effort or "high")
+        messages = cast(MessagesClient, client.beta.messages)
+        return InvestigatorAgent(toolbox, messages_client=messages, effort=effort or "high")
     raise RuntimeError(NO_KEY)
 
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import anthropic
 
@@ -91,7 +91,7 @@ class InvestigatorAgent:
         max_turns: int = 15,
     ) -> None:
         self._tools = toolbox
-        self._messages = messages_client or anthropic.Anthropic().beta.messages
+        self._messages: MessagesClient = messages_client or cast(MessagesClient, anthropic.Anthropic().beta.messages)
         self._model = model
         self._effort = effort
         self._max_turns = max_turns

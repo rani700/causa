@@ -63,7 +63,7 @@ class ExasolWarehouse(Warehouse):
         self._con.close()
 
 
-def _target(meta: dict) -> pl.DataType:  # type: ignore[type-arg]
+def _target(meta: dict) -> pl.DataType:
     kind = meta["type"]
     if kind == "DATE":
         return pl.Date()
@@ -78,7 +78,7 @@ def _target(meta: dict) -> pl.DataType:  # type: ignore[type-arg]
     return pl.String()
 
 
-def typed_frame(rows: list[tuple], meta: dict[str, dict]) -> pl.DataFrame:  # type: ignore[type-arg]
+def typed_frame(rows: list[tuple], meta: dict[str, dict]) -> pl.DataFrame:
     """Build a frame from websocket rows, typed by the result set's column metadata: the protocol
     returns DATE, TIMESTAMP and wide or fractional DECIMAL values as strings."""
     names = list(meta)
