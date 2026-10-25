@@ -11,7 +11,16 @@ def connect(settings: Settings | None = None, client_name: str = "causa") -> War
     if settings.backend is Backend.EXASOL:
         from causa.warehouse.exasol_backend import ExasolWarehouse
 
-        return ExasolWarehouse(settings, client_name=client_name)
+        def exasol() -> Warehouse:
+            return ExasolWarehouse(settings, client_name=client_name)
+
+        fallback = settings.fallback_duckdb_path
+        if fallback is None:
+            return exasol()
+        from causa.warehouse.duckdb_backend import DuckDBWarehouse
+        from causa.warehouse.failover import FailoverWarehouse
+
+        return FailoverWarehouse(exasol, lambda: DuckDBWarehouse(fallback), settings.fallback_retry_seconds)
     from causa.warehouse.duckdb_backend import DuckDBWarehouse
 
     return DuckDBWarehouse(settings.duckdb_path)

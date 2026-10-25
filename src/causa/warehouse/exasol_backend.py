@@ -24,6 +24,7 @@ class ExasolWarehouse(Warehouse):
             websocket_sslopt=sslopt,
             client_name=client_name,
             compression=True,
+            connection_timeout=settings.exasol_connect_timeout,
         )
 
     def execute(self, sql: str) -> int:

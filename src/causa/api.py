@@ -81,6 +81,7 @@ def create_app(workspace: Workspace, agent_factory: Callable[[Toolbox], Agent] |
             first = cast("datetime | None", workspace.query_log["start_time"].min())
         return {
             "backend": workspace.wh.name,
+            "warehouse": failover() if callable(failover := getattr(workspace.wh, "status", None)) else None,
             "query_log": "Exasol audit log" if workspace.query_log_table == "audit" else workspace.query_log_table,
             "today": metrics["today"],
             "history_start": str(first.date()) if first else None,

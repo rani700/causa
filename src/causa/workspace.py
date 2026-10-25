@@ -26,6 +26,7 @@ class Workspace:
     # Counterfactual replays by incident and metric, shared by every investigation in this workspace.
     _replays: dict[tuple, tuple] = field(default_factory=dict, repr=False)
     _seen: object = field(default=None, repr=False)  # the log's newest statement when it was loaded
+    _generation: int = field(default=0, repr=False)  # the warehouse's, when the log was loaded
 
     @cached_property
     def config(self) -> CausaConfig:
@@ -39,17 +40,23 @@ class Workspace:
 
     @cached_property
     def query_log(self) -> pl.DataFrame:
+        self._generation = getattr(self.wh, "generation", 0)
         self._seen = self.source.latest()  # before fetching, so nothing in between is missed
         return self.source.fetch()
 
-    def refresh(self) -> bool:
+    @property
+    def switched(self) -> bool:
+        """The warehouse failed over (or back) since the shared state was loaded."""
+        return "query_log" in self.__dict__ and getattr(self.wh, "generation", 0) != self._generation
+
+    def refresh(self, force: bool = False) -> bool:
         """Reload what the engines share when the query log has new activity. True if it did.
 
         New loads, schema changes and readers all show up in the log, so its newest timestamp is a
         cheap and complete signal. Everything derived from it is dropped and rebuilt on next use."""
         if "query_log" not in self.__dict__:
             return False  # nothing loaded yet
-        if self.source.latest() == self._seen:
+        if not force and self.source.latest() == self._seen:
             return False
         for name in ("query_log", "catalog", "graph"):
             self.__dict__.pop(name, None)

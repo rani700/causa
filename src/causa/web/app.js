@@ -143,8 +143,12 @@ async function boot() {
   }
   const s = state.status;
   const backend = s.backend === "exasol" ? "Exasol" : s.backend === "duckdb" ? "DuckDB (dev)" : s.backend;
+  const away = s.warehouse && s.warehouse.fallback;
+  const pill = away
+    ? `<span class="pill warn" title="Exasol is unreachable (${esc(s.warehouse.reason || "stopped")}). Showing the same data from Causa's built-in copy; Exasol is retried every few minutes."><span class="dot"></span>Built-in copy · Exasol offline</span>`
+    : `<span class="pill"><span class="dot"></span>${esc(backend)}</span>`;
   $("#env").innerHTML = `
-    <span class="pill"><span class="dot"></span>${esc(backend)}</span>
+    ${pill}
     <span class="pill" title="Where lineage and actors come from">${esc(s.query_log)}</span>
     <span class="pill" title="The latest day the query log has seen">Today ${esc(fmtDay(s.today))}</span>`;
 

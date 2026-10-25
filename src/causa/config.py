@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     exasol_encryption: bool = True
     # The docker-db image ships a self-signed certificate; never enable this against a real cluster.
     exasol_tls_insecure: bool = False
+    exasol_connect_timeout: int = 10  # seconds
+    # A DuckDB copy of the same data to answer from while Exasol is unreachable (e.g. an idle SaaS
+    # cluster that stopped itself). Unset: no fallback, failures surface as errors.
+    fallback_duckdb_path: Path | None = None
+    fallback_retry_seconds: int = 120
 
     slack_webhook_url: SecretStr | None = None
 

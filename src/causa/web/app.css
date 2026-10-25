@@ -96,6 +96,8 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
   font-size: 12px; color: var(--muted); white-space: nowrap;
 }
 .pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--biz); }
+.pill.warn { background: var(--warn-soft); border-color: transparent; color: var(--warn); cursor: help; }
+.pill.warn .dot { background: var(--warn); }
 
 main { max-width: 1280px; margin: 0 auto; padding: 20px 24px 64px; }
 .view { display: flex; flex-direction: column; gap: 16px; }

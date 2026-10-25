@@ -169,11 +169,14 @@ class Toolbox:
 
     def keep_fresh(self, every: float = REFRESH_SECONDS) -> bool:
         """At most every ``every`` seconds, reload if the warehouse has new activity (call under the lock)."""
-        if time.monotonic() - self._checked < every:
+        if self.ws.switched:  # failed over to the local copy, or back: rebuild on the active backend
+            self.ws.refresh(force=True)
+        elif time.monotonic() - self._checked < every:
             return False
-        self._checked = time.monotonic()
-        if not self.ws.refresh():
-            return False
+        else:
+            self._checked = time.monotonic()
+            if not self.ws.refresh():
+                return False
         self._verdicts.clear()
         return True
 
