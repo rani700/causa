@@ -7,6 +7,7 @@ anything; they return what the engines measured, rounded, with the method that p
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 from collections import OrderedDict
@@ -23,6 +24,8 @@ from causa.metrics.definitions import MetricDefinition
 from causa.recall import recall, short_cause
 from causa.verdict import Verdict
 from causa.workspace import Workspace
+
+log_ = logging.getLogger(__name__)
 
 MAX_SQL_ROWS = 50
 REFRESH_SECONDS = 300  # how often a long-running server checks the query log for new activity
@@ -179,6 +182,30 @@ class Toolbox:
                 return False
         self._verdicts.clear()
         return True
+
+    def warm_up(self) -> int:
+        """Load lineage and health for the whole history, then replay every data incident once, so
+        the first visitors get cached answers. Takes the lock per step: requests interleave.
+        Returns the number of investigations prepared."""
+        with self.lock:
+            log = self.ws.query_log
+            if log.is_empty():
+                return 0
+            first, today = log["start_time"].min().date(), self.ws.today  # type: ignore[union-attr]
+            report = self.ws.health(first, today)
+            cases = [c for c in report.cases if c.severity in (Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM)]
+            metrics = [m.name for m in self.ws.config.metrics]
+        done = 0
+        for case in cases:
+            end = min(case.start + timedelta(days=6), today)
+            for metric in metrics:
+                with self.lock:
+                    try:
+                        self._verdict(metric, f"{end - timedelta(days=6)}..{end}", None)
+                        done += 1
+                    except Exception:
+                        log_.exception("warm-up of %s for %s failed", metric, case.case_id)
+        return done
 
     def context(self) -> str:
         """Opens a conversation: the date and the exact metric names, so no turn is spent guessing."""

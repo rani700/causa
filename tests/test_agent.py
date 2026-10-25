@@ -418,3 +418,21 @@ def test_new_activity_in_the_log_refreshes_the_workspace() -> None:
     assert fresh.graph is not graph and fresh.today == before + timedelta(days=1)
     assert not tb._verdicts  # answers computed on the old data are gone
     wh.close()
+
+
+def test_health_ready_and_warm_up(ws) -> None:
+    client = TestClient(create_app(ws))
+    assert client.get("/health").json()["status"] == "ok"
+    ready = client.get("/ready").json()
+    assert ready["checks"]["warehouse"]["backend"] == "duckdb" and ready["checks"]["warm_up"] == "off"
+
+    tb = Toolbox(ws)
+    assert tb.warm_up() > 0
+    calls: list[str] = []
+    original = ws.wh.query
+    ws.wh.query = lambda sql: calls.append(sql) or original(sql)  # type: ignore[method-assign]
+    try:
+        tb.judge_change("net_revenue", f"{day(77)}..{day(83)}")  # the incident's week: prepared already
+    finally:
+        ws.wh.query = original  # type: ignore[method-assign]
+    assert not any("CAUSA_REPLAY" in sql for sql in calls)

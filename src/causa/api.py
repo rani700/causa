@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import threading
+import time
 import uuid
 from collections import OrderedDict
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import date, datetime
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any, cast
 
@@ -23,7 +26,10 @@ from causa.lineage.graph import EdgeKind
 from causa.sqlutil import dt
 from causa.workspace import Workspace
 
+log = logging.getLogger(__name__)
+
 WEB = Path(__file__).parent / "web"
+VERSION = version("causa")
 MAX_CONVERSATIONS = 200  # most recent first; older ones are forgotten
 
 
@@ -42,8 +48,11 @@ class AskResponse(BaseModel):
     cache_read_tokens: int
 
 
-def create_app(workspace: Workspace, agent_factory: Callable[[Toolbox], Agent] | None = None) -> FastAPI:
-    app = FastAPI(title="Causa", summary="Root-cause engine for business metrics")
+def create_app(
+    workspace: Workspace, agent_factory: Callable[[Toolbox], Agent] | None = None, warm: bool = False
+) -> FastAPI:
+    """The API and web UI over one workspace. ``warm`` prepares answers in the background at start."""
+    app = FastAPI(title="Causa", summary="Root-cause engine for business metrics", version=VERSION)
     lock = threading.RLock()  # one warehouse connection: serialise engine work, never model calls
     toolbox = Toolbox(workspace, lock)
     conversations: OrderedDict[str, tuple[Agent, threading.Lock]] = OrderedDict()
@@ -67,6 +76,34 @@ def create_app(workspace: Workspace, agent_factory: Callable[[Toolbox], Agent] |
             raise HTTPException(404, str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
+
+    warming = {"state": "off"}
+
+    def warm_up() -> None:
+        warming["state"] = "running"
+        started = time.monotonic()
+        try:
+            n = toolbox.warm_up()
+            warming["state"] = f"done: {n} investigations in {time.monotonic() - started:.0f}s"
+        except Exception as exc:  # never take the server down for a cache
+            warming["state"] = f"failed: {type(exc).__name__}"
+            log.exception("warm-up failed")
+
+    if warm:
+        threading.Thread(target=warm_up, name="warm-up", daemon=True).start()
+
+    @app.get("/health", tags=["operations"])
+    def health_check() -> dict[str, str]:
+        """Liveness: the process answers. No dependency checks."""
+        return {"status": "ok", "version": VERSION}
+
+    @app.get("/ready", tags=["operations"])
+    def ready() -> dict[str, Any]:
+        """Readiness: a warehouse to answer from (Exasol, or the built-in copy while it is away).
+        Never queries, and never waits for engine work."""
+        failover = getattr(workspace.wh, "status", None)
+        checks = failover() if callable(failover) else {"backend": workspace.wh.name, "fallback": False}
+        return {"status": "ok", "version": VERSION, "checks": {"warehouse": checks, "warm_up": warming["state"]}}
 
     @app.get("/", include_in_schema=False)
     def index() -> FileResponse:

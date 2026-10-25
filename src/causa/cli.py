@@ -358,6 +358,7 @@ def serve(
     port: int = 8000,
     query_log: QueryLogOption = "OPS.QUERY_LOG",
     config: ConfigOption = "causa.yaml",
+    warm: Annotated[bool, typer.Option(help="Prepare every incident's investigation in the background.")] = True,
 ) -> None:
     """Serve the engines and the agent over HTTP (FastAPI; docs at /docs)."""
     import uvicorn
@@ -365,7 +366,8 @@ def serve(
     from causa.api import create_app
 
     wh = connect()
-    uvicorn.run(create_app(Workspace(wh, config, query_log)), host=host, port=port)
+    app_ = create_app(Workspace(wh, config, query_log), warm=warm)
+    uvicorn.run(app_, host=host, port=port)
 
 
 @app.command()
