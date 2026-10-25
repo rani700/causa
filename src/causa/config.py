@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     fallback_retry_seconds: int = 120
 
     slack_webhook_url: SecretStr | None = None
+    # Watching (causa serve / causa watch): how often to look for new serious incidents (0 = off in
+    # the server), and when to send the daily brief for which metric (unset = no brief).
+    watch_minutes: float = 0
+    brief_at: str | None = None  # "HH:MM", local time of the server
+    brief_metric: str | None = None
 
     # The investigator agent. Keys use the providers' own variable names, from the environment or .env.
     agent_provider: AgentProvider = AgentProvider.AUTO

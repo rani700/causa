@@ -383,6 +383,29 @@ def mcp(query_log: QueryLogOption = "OPS.QUERY_LOG", config: ConfigOption = "cau
     serve_stdio(lambda: Toolbox(Workspace(connect(client_name="causa-mcp"), config, query_log)))
 
 
+@app.command()
+def watch(
+    once: Annotated[bool, typer.Option(help="One round, then exit (for cron); otherwise keep watching.")] = False,
+    every: Annotated[float, typer.Option(help="Minutes between rounds when watching.")] = 15,
+    query_log: QueryLogOption = "OPS.QUERY_LOG",
+    config: ConfigOption = "causa.yaml",
+) -> None:
+    """Announce each new serious data incident once, and the daily brief (Slack if configured)."""
+    import threading
+
+    from causa.watch import watch_forever, watcher_from_settings
+
+    with connect() as wh:
+        watcher = watcher_from_settings(Workspace(wh, config, query_log))
+        if not once:
+            watch_forever(watcher, every, threading.Event())
+            return
+        sent = watcher.check()
+        for n in sent:
+            console.print(f"[bold]{n.kind}[/] ({n.channel})\n{n.text}\n", highlight=False, soft_wrap=True)
+        console.print(f"[dim]{len(sent)} new notification(s)[/]")
+
+
 @metrics_app.command("restatements")
 def show_restatements(
     metric: str,

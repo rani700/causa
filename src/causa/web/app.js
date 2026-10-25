@@ -545,6 +545,7 @@ async function loadIncidents(force = false) {
   const { cases, monitored_tables } = state.cases;
   $("#incidents-hint").textContent = `${cases.length} case${cases.length === 1 ? "" : "s"} · ${monitored_tables.length} tables monitored automatically`;
   drawTimeline(cases, addDays(s.history_start, 21), s.today);
+  loadNotifications();
   const host = $("#cases");
   host.innerHTML = "";
   if (!cases.length) { host.appendChild(el("div", { class: "card empty" }, `<div class="big">All clear</div>No incidents at this severity.`)); return; }
@@ -567,6 +568,27 @@ async function loadIncidents(force = false) {
     $("[data-act=week]", card).addEventListener("click", () => { setWeek(addDays(c.start, 3)); show("overview"); });
     $("[data-act=blast]", card).addEventListener("click", () => openLineage(c.tables, true, c));
     host.appendChild(card);
+  }
+}
+
+// What Causa announced, and where: its own record, kept in the warehouse.
+async function loadNotifications() {
+  const host = $("#notifications");
+  try {
+    const r = await api("/notifications?limit=6");
+    if (!r.sent.length) {
+      host.innerHTML = r.watching_every_minutes
+        ? `<div class="card notice-strip faint">Watching every ${r.watching_every_minutes} min${r.slack ? " · posts to Slack" : ""}: nothing announced yet.</div>`
+        : "";
+      return;
+    }
+    host.innerHTML = `<div class="card notice-strip">
+      <div class="chart-head"><h2>Announced by Causa</h2><span class="muted">${r.slack ? "posted to Slack" : "recorded in CAUSA.NOTIFICATIONS"}${r.watching_every_minutes ? ` · checks every ${r.watching_every_minutes} min` : ""}</span></div>
+      <ul>${r.sent.map((n) => `<li><span class="badge ${n.kind === "brief" ? "normal" : "critical"}">${n.kind}</span>
+        <span class="faint">${esc(n.sent_at.replace("T", " ").slice(0, 16))}</span>
+        <span>${esc(n.text.split("\n")[0])}</span></li>`).join("")}</ul></div>`;
+  } catch {
+    host.innerHTML = "";
   }
 }
 

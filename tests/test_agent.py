@@ -451,3 +451,9 @@ def test_answers_report_what_they_cost(ws) -> None:
     # 12,824 input tokens (6,656 cached) and 8,264 output on gpt-5-nano: the live Exasol run
     assert round(usd("gpt-5-nano-2025-08-07", 12_824, 6_656, 8_264), 5) == 0.00365
     assert usd("claude-opus-5-5", 1, 0, 1) is None  # unknown price: tokens only
+
+
+def test_notifications_endpoint(ws) -> None:
+    client = TestClient(create_app(ws))
+    r = client.get("/notifications").json()
+    assert r["watching_every_minutes"] == 0 and r["slack"] is False and isinstance(r["sent"], list)

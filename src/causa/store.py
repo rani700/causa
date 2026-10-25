@@ -9,6 +9,10 @@ REPLAY_SCHEMA = "CAUSA_REPLAY"  # scratch tables of counterfactual replays
 SCHEMAS = frozenset({SCHEMA, REPLAY_SCHEMA})  # never monitored, never part of the company's lineage
 
 TABLES = {
+    # What Causa told whom, when (alerts and briefs); also what keeps alerts from repeating.
+    "CAUSA.NOTIFICATIONS": """CREATE TABLE CAUSA.NOTIFICATIONS (
+        NOTIFICATION_KEY VARCHAR(400), KIND VARCHAR(20), CHANNEL VARCHAR(20), SENT_AT TIMESTAMP,
+        MESSAGE VARCHAR(2000))""",
     "CAUSA.METRIC_SNAPSHOTS": """CREATE TABLE CAUSA.METRIC_SNAPSHOTS (
         METRIC VARCHAR(100), OBSERVED_AT TIMESTAMP, METRIC_DATE DATE, DIMENSION VARCHAR(128),
         DIM_VALUE VARCHAR(200), MEASURE DOUBLE, VOLUME DOUBLE)""",

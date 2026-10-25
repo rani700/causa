@@ -388,3 +388,8 @@ details[open] summary { margin-bottom: 6px; }
   .tour-card { right: 16px; left: 16px; bottom: 16px; width: auto; }
   .tour-btn { padding: 4px 10px; }
 }
+
+/* notifications */
+.notice-strip ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.notice-strip li { display: flex; gap: 10px; align-items: baseline; font-size: 13px; }
+.notice-strip li span:last-child { min-width: 0; overflow-wrap: anywhere; }

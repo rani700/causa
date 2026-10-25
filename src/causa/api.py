@@ -21,9 +21,11 @@ from pydantic import BaseModel
 
 from causa.agent import NO_KEY, Agent, Toolbox, agent_provider, make_agent
 from causa.brief import morning_brief, to_slack, to_text
+from causa.config import get_settings
 from causa.lineage import LineageGraph
 from causa.lineage.graph import EdgeKind
 from causa.sqlutil import dt
+from causa.watch import watch_forever, watcher_from_settings
 from causa.workspace import Workspace
 
 log = logging.getLogger(__name__)
@@ -93,6 +95,18 @@ def create_app(
 
     if warm:
         threading.Thread(target=warm_up, name="warm-up", daemon=True).start()
+
+    watcher = watcher_from_settings(workspace, lock)
+    every = get_settings().watch_minutes
+    if every > 0:
+        threading.Thread(
+            target=watch_forever, args=(watcher, every, threading.Event()), name="watch", daemon=True
+        ).start()
+
+    @app.get("/notifications")
+    def notifications(limit: int = 20) -> Any:
+        """What Causa announced (new serious incidents, daily briefs), newest first."""
+        return {"watching_every_minutes": every, "slack": bool(watcher.webhook_url), "sent": watcher.recent(limit)}
 
     @app.get("/health", tags=["operations"])
     def health_check() -> dict[str, str]:
