@@ -183,7 +183,8 @@ def test_web_ui_and_its_endpoints(ws, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     client = TestClient(create_app(ws))
     page = client.get("/")
-    assert page.status_code == 200 and "/static/app.js" in page.text
+    assert page.status_code == 200 and "/static/app.js?v=" in page.text and "/static/app.css?v=" in page.text
+    assert page.headers["cache-control"] == "no-cache"
     assert client.get("/static/app.js").status_code == 200
 
     status = client.get("/status").json()

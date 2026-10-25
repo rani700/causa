@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import threading
 import time
@@ -15,7 +16,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -81,6 +82,7 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
 
+    page = versioned_index()
     warming = {"state": "off"}
 
     def warm_up() -> None:
@@ -122,8 +124,8 @@ def create_app(
         return {"status": "ok", "version": VERSION, "checks": {"warehouse": checks, "warm_up": warming["state"]}}
 
     @app.get("/", include_in_schema=False)
-    def index() -> FileResponse:
-        return FileResponse(WEB / "index.html")
+    def index() -> HTMLResponse:
+        return HTMLResponse(page)
 
     app.mount("/static", StaticFiles(directory=WEB), name="static")
 
@@ -272,6 +274,16 @@ def create_app(
         )
 
     return app
+
+
+def versioned_index() -> str:
+    """index.html with each static file linked as ``name?v=<content hash>``: a new release changes
+    the URL, so no browser or CDN cache (some override Cache-Control) can serve a stale copy."""
+    html = (WEB / "index.html").read_text()
+    for name in ("app.js", "app.css"):
+        digest = hashlib.sha256((WEB / name).read_bytes()).hexdigest()[:12]
+        html = html.replace(f"/static/{name}", f"/static/{name}?v={digest}")
+    return html
 
 
 def lineage_map_dict(graph: LineageGraph) -> dict[str, Any]:
