@@ -11,8 +11,9 @@ from typing import Protocol
 
 import polars as pl
 
+from causa import store
 from causa.sqlutil import ts
-from causa.warehouse import Warehouse
+from causa.warehouse import ENGINE_CLIENTS, Warehouse
 
 
 class QueryLogSource(Protocol):
@@ -30,7 +31,10 @@ def _window(column: str, since: datetime | None, until: datetime | None) -> str:
 
 class ExasolAuditLog:
     """Reads Exasol's own audit trail (requires auditing enabled on the database and a user with
-    access to the EXA_DBA_AUDIT_* system tables)."""
+    access to the EXA_DBA_AUDIT_* system tables).
+
+    Causa's own sessions are left out (drivers append their version to the client name), and so is
+    any statement on Causa's own schemas: they are Causa's work, not the company's data flow."""
 
     def __init__(self, wh: Warehouse) -> None:
         self._wh = wh
@@ -41,8 +45,14 @@ class ExasolAuditLog:
                    q.START_TIME, q.STOP_TIME, q.DURATION, q.SUCCESS, q.ROW_COUNT, q.ERROR_TEXT
             FROM EXA_STATISTICS.EXA_DBA_AUDIT_SQL q
             JOIN EXA_STATISTICS.EXA_DBA_AUDIT_SESSIONS s ON s.SESSION_ID = q.SESSION_ID
-            WHERE {_window("q.START_TIME", since, until)}
+            WHERE {_window("q.START_TIME", since, until)} AND {_not_causa("s.CLIENT", "q.SQL_TEXT")}
             ORDER BY q.START_TIME, q.STMT_ID""")
+
+
+def _not_causa(client: str, sql_text: str) -> str:
+    sessions = " AND ".join(f"{client} <> '{c}' AND {client} NOT LIKE '{c} %'" for c in ENGINE_CLIENTS)
+    schemas = " AND ".join(f"UPPER({sql_text}) NOT LIKE '%{s}.%'" for s in sorted(store.SCHEMAS))
+    return f"({client} IS NULL OR ({sessions})) AND {schemas}"
 
 
 class TableQueryLog:

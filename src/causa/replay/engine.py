@@ -18,6 +18,7 @@ Nothing outside the CAUSA_REPLAY schema is written.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -26,6 +27,7 @@ import polars as pl
 import sqlglot
 from sqlglot import exp
 
+from causa import store
 from causa.health import HealthReport, Signal
 from causa.health.models import HealthCase, HealthIncident
 from causa.lineage import LineageGraph
@@ -46,7 +48,7 @@ from causa.sqlutil import command_name, dt
 from causa.verdict.linkage import all_incidents
 from causa.warehouse import Warehouse
 
-SANDBOX = "CAUSA_REPLAY"
+SANDBOX = store.REPLAY_SCHEMA
 _ADD_COLUMN = re.compile(r"ADD\s+(?:COLUMN\s+)?\"?(\w+)\"?", re.I)
 _INCREMENTAL = {"INSERT", "MERGE"}
 _FULL_REFRESH = {"CREATE TABLE AS", "TRUNCATE", "DELETE", "UPDATE"}
@@ -254,7 +256,8 @@ class Replayer:
     # -- running ---------------------------------------------------------------------------------
 
     def run(self, plan: ReplayPlan, metric: MetricDefinition, keep: bool = False) -> ReplayResult:
-        run_id = hashlib.sha1(f"{plan.case.case_id}{plan.load_days}".encode()).hexdigest()[:6].upper()
+        # Unique per process too: the web UI and an MCP session may replay the same incident at once.
+        run_id = hashlib.sha1(f"{plan.case.case_id}{plan.load_days}{os.getpid()}".encode()).hexdigest()[:6].upper()
 
         def sandbox(kind: str, table: str) -> str:
             return f"{SANDBOX}.{kind}{run_id}_{table.replace('.', '__')}"
@@ -262,8 +265,8 @@ class Replayer:
         created: list[str] = []
 
         def create(name: str, select: str) -> None:
-            self._wh.execute(f"DROP TABLE IF EXISTS {name}")
-            self._wh.execute(f"CREATE TABLE {name} AS {select}")
+            # One statement, not DROP + CREATE: each statement is a round trip to the warehouse.
+            self._wh.execute(f"CREATE OR REPLACE TABLE {name} AS {select}")
             created.append(name)
 
         self._wh.execute(f"CREATE SCHEMA IF NOT EXISTS {SANDBOX}")

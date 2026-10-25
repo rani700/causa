@@ -229,6 +229,13 @@ A dependency-free single page (`src/causa/web/`, plain HTML/CSS/JS, no build ste
   everything a broken table would hit.
 - **Ask**: the investigator agent, with every tool call it made shown under its answer (needs `ANTHROPIC_API_KEY`).
 
+**Speed on a remote warehouse.** Every query is a round trip (about 0.3 s from India to Frankfurt),
+so Causa avoids repeating them. A replay depends on the incident, not on the week being judged, so
+each incident is replayed once and every week that touches it reuses the result. Verdicts are
+remembered per question, so judge, recall and the web UI share one run, and reopening a week is
+instant. Measured on Exasol SaaS: first look at a week with a new incident about 17 s, a week whose
+incidents were already replayed about 4.5 s, a week seen before 0 s (it was 18 to 34 s).
+
 ### The investigator agent, the brief and the API
 
 `causa ask` puts Claude (`claude-opus-5-5`, adaptive thinking, high effort) in front of the engines.

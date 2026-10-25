@@ -23,6 +23,8 @@ class Workspace:
     config_path: str = "causa.yaml"
     query_log_table: str = "OPS.QUERY_LOG"  # or "audit" for Exasol's own audit log
     _health: HealthReport | None = field(default=None, repr=False)
+    # Counterfactual replays by incident and metric, shared by every investigation in this workspace.
+    _replays: dict[tuple, tuple] = field(default_factory=dict, repr=False)
 
     @cached_property
     def config(self) -> CausaConfig:
@@ -53,6 +55,9 @@ class Workspace:
         return latest.date() if latest else date.today()  # type: ignore[union-attr]
 
     def health(self, since: date, until: date) -> HealthReport:
+        # Nothing is loaded after today: asking past it must not force a rescan of everything before.
+        until = min(until, self.today)
+        since = min(since, until)
         h = self._health
         if h is None or h.since > since or h.until < until:
             # Scan generously so that follow-up questions about nearby days reuse the result.
@@ -63,4 +68,6 @@ class Workspace:
         return h
 
     def investigator(self, replay: bool = True) -> Investigator:
-        return Investigator(self.wh, self.catalog, self.graph, self.query_log, self._health, replay=replay)
+        return Investigator(
+            self.wh, self.catalog, self.graph, self.query_log, self._health, replay=replay, replays=self._replays
+        )

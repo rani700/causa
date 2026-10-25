@@ -137,8 +137,12 @@ class Investigator:
         query_log: pl.DataFrame,
         health: HealthReport | None = None,
         replay: bool = False,
+        replays: dict[tuple, tuple] | None = None,
     ) -> None:
         self._replay = replay
+        # Replays depend on the incident and the metric, not on the period being judged: one replay
+        # serves every period that touches the incident. Pass a dict that outlives the investigator.
+        self._replays = {} if replays is None else replays
         self._wh = wh
         self._catalog = catalog
         self._graph = graph
@@ -146,6 +150,11 @@ class Investigator:
         self._health = health
 
     def health(self, since: date, until: date) -> HealthReport:
+        # Nothing is loaded after the log's last day: asking past it must not force a rescan.
+        latest = self._log["start_time"].max() if self._log.height else None
+        if latest is not None:
+            until = min(until, latest.date())  # type: ignore[union-attr]
+            since = min(since, until)
         h = self._health
         if h is None or h.since > since or h.until < until:
             h = HealthScanner(self._wh, self._catalog, self._graph).scan(since, until, self._log)
@@ -160,11 +169,7 @@ class Investigator:
         window = {baseline.start + timedelta(days=i) for i in range(baseline.days)} | {
             current.start + timedelta(days=i) for i in range(current.days)
         }
-        restated = [
-            r
-            for dim in ["*", *metric.dimensions]
-            for r in restatements(self._wh, metric, baseline.start, current.end, dim)
-        ]
+        restated = restatements(self._wh, metric, baseline.start, current.end, ["*", *metric.dimensions])
 
         findings = []
         for case in report.cases:
@@ -268,11 +273,14 @@ class Investigator:
         for f in findings:
             if not f.is_data or f.duplicate_of or f.estimate.method == HEALED:
                 continue
-            plan = replayer.plan(f.case, metric)
+            key = _replay_key(f.case, metric)
+            if key not in self._replays:
+                plan = replayer.plan(f.case, metric)
+                self._replays[key] = (plan, None) if isinstance(plan, str) else (plan, replayer.run(plan, metric))
+            plan, result = self._replays[key]
             if isinstance(plan, str):
                 f.replay_note = plan
                 continue
-            result = replayer.run(plan, metric)
             if not result.faithful:
                 f.replay_note = "control replay did not reproduce the logged row counts; estimate kept"
                 continue
@@ -468,3 +476,17 @@ def _evidence(case: HealthCase, finding: DataFinding, restated: list[Restatement
     if hits:
         out.append(Evidence(f"{len(hits)} reported value(s) on these days were restated afterwards", 1.0))
     return out
+
+
+def _replay_key(case: HealthCase, metric: MetricDefinition) -> tuple:
+    """What a replay depends on: the metric and the incident's content. Not the case id: ids are
+    numbered within a scan, so a wider rescan can renumber the same incident."""
+    return (
+        metric.name,
+        metric.table,
+        case.start,
+        case.end,
+        tuple(
+            sorted((i.signal.value, i.table, i.column or "", tuple(i.days or [i.start])) for i in all_incidents(case))
+        ),
+    )

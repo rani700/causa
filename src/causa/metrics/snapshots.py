@@ -8,6 +8,7 @@ that changed after it was first reported is strong evidence of a data problem, n
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
@@ -120,23 +121,30 @@ def restatements(
     metric: MetricDefinition,
     since: date,
     until: date,
-    dimension: str = TOTAL,
+    dimension: str | Sequence[str] = TOTAL,
     min_change: float = 0.02,
 ) -> list[Restatement]:
-    """Days whose value changed by at least ``min_change`` after it was first reported."""
-    if not store.exists(wh, TABLE):
+    """Days whose value changed by at least ``min_change`` after it was first reported.
+
+    Several dimensions are read in one query (each query is a round trip to the warehouse)."""
+    dimensions = [dimension] if isinstance(dimension, str) else list(dimension)
+    if not dimensions or not store.exists(wh, TABLE):
         return []
     snaps = wh.query(f"""
-        SELECT METRIC_DATE, DIM_VALUE, OBSERVED_AT, MEASURE FROM {TABLE}
-        WHERE METRIC = '{metric.name}' AND DIMENSION = '{dimension}'
+        SELECT DIMENSION, METRIC_DATE, DIM_VALUE, OBSERVED_AT, MEASURE FROM {TABLE}
+        WHERE METRIC = '{metric.name}' AND DIMENSION IN ({", ".join(f"'{d}'" for d in dimensions)})
           AND METRIC_DATE BETWEEN {dt(since)} AND {dt(until)}""")
     if snaps.is_empty():
         return []
-    first = snaps.sort("observed_at").group_by("metric_date", "dim_value").first()
-    latest = snaps.sort("observed_at").group_by("metric_date", "dim_value").last()
-    joined = first.join(latest, on=["metric_date", "dim_value"], suffix="_latest")
+    keys = ["dimension", "metric_date", "dim_value"]
+    first = snaps.sort("observed_at").group_by(keys).first()
+    latest = snaps.sort("observed_at").group_by(keys).last()
+    joined = first.join(latest, on=keys, suffix="_latest")
+    order = {d: i for i, d in enumerate(dimensions)}
     out = []
-    for r in joined.sort("metric_date", "dim_value").iter_rows(named=True):
+    for r in sorted(
+        joined.iter_rows(named=True), key=lambda r: (order[r["dimension"]], r["metric_date"], r["dim_value"])
+    ):
         base = r["measure"] or 0.0
         change = (r["measure_latest"] or 0.0) - base
         if abs(change) >= min_change * max(abs(base), 1e-9):
@@ -144,7 +152,7 @@ def restatements(
                 Restatement(
                     metric.name,
                     r["metric_date"],
-                    dimension,
+                    r["dimension"],
                     r["dim_value"],
                     base,
                     r["observed_at"],

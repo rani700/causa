@@ -7,6 +7,7 @@ anything; they return what the engines measured, rounded, with the method that p
 from __future__ import annotations
 
 import json
+from collections import OrderedDict
 from collections.abc import Callable
 from datetime import date, timedelta
 from typing import Any
@@ -22,6 +23,7 @@ from causa.verdict import Verdict
 from causa.workspace import Workspace
 
 MAX_SQL_ROWS = 50
+VERDICT_CACHE = 32  # investigations remembered per toolbox (a week takes seconds on a remote warehouse)
 
 
 def _r(x: float | None, digits: int = 2) -> float | None:
@@ -128,6 +130,9 @@ class Toolbox:
 
     def __init__(self, ws: Workspace) -> None:
         self.ws = ws
+        # The workspace pins one snapshot of the query log, lineage and health, so a verdict for the
+        # same question cannot change while it lives: judge, recall and the web UI share one run.
+        self._verdicts: OrderedDict[tuple[str, Period, Period], Verdict] = OrderedDict()
         self._handlers: dict[str, Callable[..., Any]] = {
             "list_metrics": self.list_metrics,
             "explain_metric": self.explain_metric,
@@ -181,8 +186,17 @@ class Toolbox:
 
     def _verdict(self, metric: str, current: str, baseline: str | None) -> Verdict:
         cur, base = self._periods(current, baseline)
+        definition = self._metric(metric)
+        key = (definition.name, cur, base)
+        if key in self._verdicts:
+            self._verdicts.move_to_end(key)
+            return self._verdicts[key]
         self.ws.health(base.start, cur.end + timedelta(days=3))
-        return self.ws.investigator(replay=True).verdict(self._metric(metric), cur, base)
+        verdict = self.ws.investigator(replay=True).verdict(definition, cur, base)
+        self._verdicts[key] = verdict
+        if len(self._verdicts) > VERDICT_CACHE:
+            self._verdicts.popitem(last=False)
+        return verdict
 
     def judge_change(self, metric: str, current: str, baseline: str | None = None) -> dict[str, Any]:
         return verdict_dict(self._verdict(metric, current, baseline))

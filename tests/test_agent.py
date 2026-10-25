@@ -247,3 +247,37 @@ def test_mcp_server_offers_the_agents_tools(ws) -> None:
             assert len(built) == 1  # one workspace for the whole session
 
     anyio.run(session)
+
+
+def test_investigations_reuse_replays_and_verdicts(ws, monkeypatch: pytest.MonkeyPatch) -> None:
+    from causa.metrics.attribution import Period
+    from causa.verdict import Investigator
+
+    calls: list[str] = []
+    for name in ("execute", "query"):
+        original = getattr(ws.wh, name)
+        monkeypatch.setattr(ws.wh, name, lambda sql, _o=original: calls.append(sql) or _o(sql))
+
+    def replayed() -> int:
+        return sum("CAUSA_REPLAY" in sql for sql in calls)
+
+    ws._replays.clear()
+    tb = Toolbox(ws)
+    first = tb.judge_change("net_revenue", f"{day(76)}..{day(82)}")
+    assert replayed() > 0
+    # another week touching the same incident re-uses its replay
+    calls.clear()
+    second = tb.judge_change("net_revenue", f"{day(77)}..{day(83)}")
+    assert replayed() == 0 and len(ws._replays) == 1
+    # the same question again, from any tool, runs nothing at all
+    calls.clear()
+    tb.recall_consumers("net_revenue", f"{day(77)}..{day(83)}")
+    assert tb.investigate("net_revenue", f"{day(77)}..{day(83)}")["verdict"] == second
+    assert calls == []
+
+    # cached replays give exactly what a fresh, uncached run gives
+    fresh = Investigator(ws.wh, ws.catalog, ws.graph, ws.query_log, ws._health, replay=True).verdict(
+        ws.config.metric("net_revenue"), Period(day(77), day(83))
+    )
+    assert second["data_incident_impact"] == round(fresh.data_impact, 2) < 0
+    assert first["findings"][0]["method"].startswith("counterfactual replay")

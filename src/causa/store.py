@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from causa.warehouse import Warehouse
 
+SCHEMA = "CAUSA"
+REPLAY_SCHEMA = "CAUSA_REPLAY"  # scratch tables of counterfactual replays
+SCHEMAS = frozenset({SCHEMA, REPLAY_SCHEMA})  # never monitored, never part of the company's lineage
+
 TABLES = {
     "CAUSA.METRIC_SNAPSHOTS": """CREATE TABLE CAUSA.METRIC_SNAPSHOTS (
         METRIC VARCHAR(100), OBSERVED_AT TIMESTAMP, METRIC_DATE DATE, DIMENSION VARCHAR(128),

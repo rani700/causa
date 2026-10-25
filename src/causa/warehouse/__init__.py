@@ -1,6 +1,10 @@
 from causa.config import Backend, Settings, get_settings
 from causa.warehouse.base import Warehouse
 
+# Client names of Causa's own engine sessions. Exasol records them in its audit log next to the
+# company's workload; reading lineage from that log must not count Causa as a consumer.
+ENGINE_CLIENTS = ("causa", "causa-mcp")
+
 
 def connect(settings: Settings | None = None, client_name: str = "causa") -> Warehouse:
     settings = settings or get_settings()
@@ -13,4 +17,4 @@ def connect(settings: Settings | None = None, client_name: str = "causa") -> War
     return DuckDBWarehouse(settings.duckdb_path)
 
 
-__all__ = ["Warehouse", "connect"]
+__all__ = ["ENGINE_CLIENTS", "Warehouse", "connect"]
