@@ -7,14 +7,14 @@ import threading
 import time
 import uuid
 from collections import OrderedDict
-from collections.abc import Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from datetime import date, datetime
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any, cast
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -112,6 +112,15 @@ def create_app(
         return FileResponse(WEB / "index.html")
 
     app.mount("/static", StaticFiles(directory=WEB), name="static")
+
+    @app.middleware("http")
+    async def revalidate_ui(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+        """The UI's files change with every release: browsers must ask before reusing a copy (an
+        unchanged file costs a 304)."""
+        response = await call_next(request)
+        if request.url.path == "/" or request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
     @app.get("/status")
     def status() -> Any:

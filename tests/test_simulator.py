@@ -144,3 +144,10 @@ def test_random_scenarios_are_varied_and_valid() -> None:
         assert sum(e.kind == "market_launch" for e in s.events) <= 1
         assert all(s.start <= e.start <= s.start + timedelta(days=s.days) for e in s.events)
     assert random_scenario(3) == random_scenario(3)  # reproducible
+
+
+def test_a_random_company_drifts_its_schema_at_most_once() -> None:
+    from causa.benchmark import random_scenario
+
+    for seed in range(1, 60):
+        assert sum(e.kind == "schema_drift_stall" for e in random_scenario(seed).events) <= 1

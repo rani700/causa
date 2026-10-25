@@ -493,7 +493,7 @@ function businessCard(v, unit) {
 }
 
 function recallCard(recalls, unit) {
-  const card = el("div", { class: "card" });
+  const card = el("div", { class: "card recall-card" });
   card.innerHTML = `<div class="chart-head"><h2>Who saw wrong numbers</h2></div>`;
   if (!recalls.length) {
     card.appendChild(el("div", { class: "empty" }, `<div class="big">Nobody</div>No report, dashboard or sync read data affected by an incident this week.`));
@@ -606,6 +606,13 @@ function drawTimeline(cases, first, last) {
 
 async function loadLineage() {
   if (state.map) return;
+  // Opening the view twice in a row (a tab click, then a blast-radius link) must not draw twice:
+  // a second draw would wipe the highlights the first one received.
+  if (!state.mapLoading) state.mapLoading = drawLineageOnce().finally(() => { state.mapLoading = null; });
+  return state.mapLoading;
+}
+
+async function drawLineageOnce() {
   $("#lineage").innerHTML = `<div class="loading"><div class="spinner"></div>Reconstructing lineage…</div>`;
   try {
     state.map = await api("/lineage-map");
@@ -895,4 +902,134 @@ async function ask() {
   }
 }
 
-boot();
+// -- guided tour -----------------------------------------------------------------------------
+// Six stops through the story a judge or a new user should see: the chart, the split, the
+// evidence, who saw wrong numbers, the blast radius, and the agent. Start with ?tour=1.
+
+// Read before boot() rewrites the URL with the current view, metric and week.
+const tour = { step: -1, card: null, steps: [], requested: new URLSearchParams(location.search).get("tour") === "1" };
+
+function headlineCase() {
+  const cases = (state.cases && state.cases.cases) || [];
+  const critical = cases.filter((c) => c.severity === "critical");
+  return (critical.length ? critical : cases).slice(-1)[0] || null;
+}
+
+function tourSteps() {
+  const unit = () => metricDef().label.toLowerCase();
+  return [
+    {
+      view: "overview",
+      target: "#chart",
+      title: "Every day of the metric",
+      text: () => `Daily ${unit()}. The red and amber bands are data incidents Causa found on its own: it read the warehouse's query log, rebuilt the pipeline's lineage, and checked every table feeding the metric.`,
+      async before() {
+        if (!state.cases) await loadCases();
+        const c = headlineCase();
+        if (c) setWeek(addDays(c.start, Math.min(6, Math.max(3, (Date.parse(c.end) - Date.parse(c.start)) / 864e5))));
+      },
+    },
+    {
+      view: "overview",
+      target: ".verdict-hero",
+      title: "Real, or broken?",
+      text: () => "For the selected week, the reported change is split in two: how much is broken data, and how much is real business movement. This is the question that usually takes an analyst days.",
+    },
+    {
+      view: "overview",
+      target: ".card.finding",
+      title: "What broke, measured not guessed",
+      text: () => "The incident, its cause in plain words, and its exact effect. Causa repaired the data and re-ran the company's own pipeline SQL to get this number; the evidence behind the confidence is listed too.",
+    },
+    {
+      view: "overview",
+      target: ".recall-card",
+      title: "Who saw wrong numbers",
+      text: () => "Every dashboard, report, spreadsheet and sync that read the bad data, with a correction notice ready to send.",
+    },
+    {
+      view: "lineage",
+      target: "#lineage",
+      title: "Blast radius",
+      text: () => "The data flow, rebuilt from the query log alone. Highlighted: everything the broken table reaches, from staging tables to the board pack and the Salesforce sync.",
+      async before() {
+        const c = headlineCase();
+        openLineage(c ? c.tables : ["RAW.SHOP_ORDERS"], true, c);
+      },
+    },
+    {
+      view: "ask",
+      target: "#ask-form",
+      title: "Ask in plain words",
+      text: () => state.status.agent_available
+        ? "A language model in front of the same engines: it decides which checks to run, and every figure in its answer comes from a tool call you can see under it."
+        : "With an OpenAI or Anthropic key configured, a language model answers questions here using the same engines, showing every tool call it made.",
+    },
+  ];
+}
+
+async function waitFor(selector, ms = 90000) {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    const found = $(selector);
+    if (found && !found.closest("[hidden]")) return found;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return null;
+}
+
+function tourCard() {
+  if (tour.card) return tour.card;
+  tour.card = el("div", { class: "tour-card", role: "dialog", "aria-live": "polite" });
+  document.body.appendChild(tour.card);
+  return tour.card;
+}
+
+async function tourGo(i) {
+  $$(".tour-focus").forEach((n) => n.classList.remove("tour-focus"));
+  if (i < 0 || i >= tour.steps.length) return endTour();
+  tour.step = i;
+  const step = tour.steps[i];
+  const card = tourCard();
+  card.innerHTML = `<div class="tour-count">${i + 1} / ${tour.steps.length}</div><div class="tour-title">${esc(step.title)}</div><div class="tour-text"><span class="spinner small"></span> Preparing…</div>`;
+  if (step.view) show(step.view);
+  if (step.before) await step.before();
+  const target = await waitFor(step.target);
+  if (tour.step !== i) return; // the visitor moved on
+  if (target) {
+    target.classList.add("tour-focus");
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+  card.innerHTML = `
+    <div class="tour-count">${i + 1} / ${tour.steps.length}</div>
+    <div class="tour-title">${esc(step.title)}</div>
+    <div class="tour-text">${esc(step.text())}</div>
+    <div class="tour-actions">
+      <button class="link" data-t="close">End tour</button>
+      <span>${i ? `<button data-t="back">Back</button>` : ""}
+      <button class="primary" data-t="next">${i === tour.steps.length - 1 ? "Done" : "Next"}</button></span>
+    </div>`;
+  $("[data-t=next]", card).addEventListener("click", () => tourGo(i + 1));
+  $("[data-t=back]", card)?.addEventListener("click", () => tourGo(i - 1));
+  $("[data-t=close]", card).addEventListener("click", endTour);
+  $("[data-t=next]", card).focus();
+}
+
+function startTour() {
+  tour.steps = tourSteps();
+  tourGo(0);
+}
+
+function endTour() {
+  tour.step = -1;
+  $$(".tour-focus").forEach((n) => n.classList.remove("tour-focus"));
+  tour.card?.remove();
+  tour.card = null;
+}
+
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && tour.step >= 0) endTour(); });
+
+boot().then(() => {
+  $("#tour-btn")?.addEventListener("click", startTour);
+  if (tour.requested) startTour();
+});

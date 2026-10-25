@@ -485,8 +485,8 @@ def eval_bench(
     from causa.benchmark import report_markdown, run_benchmark
 
     with console.status(f"Simulating and scoring {seeds} companies ({workers} at a time)"):
-        results = run_benchmark(list(range(first_seed, first_seed + seeds)), workers)
-    report = report_markdown(results)
+        results, failed = run_benchmark(list(range(first_seed, first_seed + seeds)), workers)
+    report = report_markdown(results, failed)
     console.print(report, highlight=False, soft_wrap=True)
     if out:
         Path(out).parent.mkdir(parents=True, exist_ok=True)
