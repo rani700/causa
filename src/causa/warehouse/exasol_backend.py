@@ -34,6 +34,16 @@ class ExasolWarehouse(Warehouse):
         stmt = self._con.execute(sql)
         return lower_columns(typed_frame(stmt.fetchall(), stmt.columns()))
 
+    def query_limited(self, sql: str, seconds: float) -> pl.DataFrame:
+        # Exasol stops the statement itself (an ordinary SQL error, so no failover), well before the
+        # client's socket timeout would treat the silence as a lost connection.
+        self._con.execute(f"ALTER SESSION SET QUERY_TIMEOUT = {max(1, int(seconds))}")
+        try:
+            stmt = self._con.execute(sql)
+            return lower_columns(typed_frame(stmt.fetchall(), stmt.columns()))
+        finally:
+            self._con.execute("ALTER SESSION SET QUERY_TIMEOUT = 0")
+
     def load(self, df: pl.DataFrame, table: str) -> int:
         if df.is_empty():
             return 0

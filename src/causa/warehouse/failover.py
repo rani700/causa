@@ -134,6 +134,10 @@ class FailoverWarehouse(Warehouse):
         result: pl.DataFrame = self._call("query", sql)
         return result
 
+    def query_limited(self, sql: str, seconds: float) -> pl.DataFrame:
+        result: pl.DataFrame = self._call("query_limited", sql, seconds)
+        return result
+
     def load(self, df: pl.DataFrame, table: str) -> int:
         return int(self._call("load", df, table))
 

@@ -5,10 +5,11 @@ from datetime import date, timedelta
 from types import SimpleNamespace
 from typing import Any
 
+import duckdb
 import pytest
 from fastapi.testclient import TestClient
 
-from causa.agent import TOOL_DEFINITIONS, InvestigatorAgent, Toolbox
+from causa.agent import TOOL_DEFINITIONS, InvestigatorAgent, Toolbox, tools
 from causa.agent.agent import FALLBACK_BETA, MODEL
 from causa.api import create_app
 from causa.brief import morning_brief, to_slack, to_text
@@ -85,6 +86,54 @@ def test_sql_tool_is_read_only_and_keeps_ground_truth_out(ws) -> None:
     assert "off limits" in json.loads(toolbox.call("run_sql", {"sql": "SELECT * FROM SIM.EVENTS"}))["error"]
     out = json.loads(toolbox.call("run_sql", {"sql": "SELECT ORDER_ID FROM MART.FCT_ORDER_LINES"}))
     assert len(out["rows"]) == 50 and out["truncated"]
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT content FROM read_text('/proc/self/environ')",  # file reader (table function)
+        "SELECT * FROM '/etc/hosts'",  # file as a table name
+        "SELECT * INTO TABLE MART.COPY FROM MART.FCT_ORDER_LINES",  # a write dressed as a SELECT
+        "SELECT * FROM SYS.EXA_DBA_USERS",
+        "SELECT * FROM EXA_DBA_USERS",  # Exasol resolves system views without a schema
+        "SELECT HOST FROM EXA_STATISTICS.EXA_DBA_AUDIT_SESSIONS",
+        "SELECT * FROM MART.FCT_ORDER_LINES WHERE 1 IN (SELECT 1 FROM EXA_STATISTICS.EXA_DBA_AUDIT_SQL)",
+        "SELECT * FROM OPS.QUERY_LOG",
+        "SELECT * FROM CAUSA.NOTIFICATIONS",
+        "SELECT * FROM warehouse.MART.FCT_ORDER_LINES",
+    ],
+)
+def test_sql_tool_refuses_anything_but_company_tables(ws, sql: str) -> None:
+    assert "error" in json.loads(Toolbox(ws).call("run_sql", {"sql": sql}))
+
+
+def test_sql_tool_allows_company_tables_and_ctes(ws) -> None:
+    sql = (
+        "WITH t AS (SELECT REGION, SUM(NET_REVENUE_EUR) AS V FROM MART.FCT_ORDER_LINES GROUP BY REGION) SELECT * FROM t"
+    )
+    out = json.loads(Toolbox(ws).call("run_sql", {"sql": sql}))
+    assert "error" not in out and out["rows"]
+
+
+def test_the_local_copy_cannot_read_files(tmp_path) -> None:
+    wh = DuckDBWarehouse(tmp_path / "w.duckdb")
+    with pytest.raises(duckdb.Error):
+        wh.query("SELECT content FROM read_text('/etc/hosts')")
+    wh.execute("CREATE SCHEMA S")  # the attached file itself stays writable
+    wh.execute("CREATE TABLE S.T AS SELECT 1 AS X")
+    assert wh.scalar("SELECT X FROM S.T") == 1
+    wh.close()
+
+
+def test_a_slow_sql_tool_query_is_stopped(ws, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(tools, "SQL_SECONDS", 0.2)
+    sql = (
+        "SELECT COUNT(*) FROM MART.FCT_ORDER_LINES A CROSS JOIN MART.FCT_ORDER_LINES B "
+        "CROSS JOIN MART.FCT_ORDER_LINES C"
+    )
+    out = json.loads(Toolbox(ws).call("run_sql", {"sql": sql}))
+    assert "stopped after" in out["error"]
+    assert Toolbox(ws).call("list_metrics", {})  # the connection is still usable
 
 
 def test_judge_change_tool_returns_replayed_data_finding(ws) -> None:

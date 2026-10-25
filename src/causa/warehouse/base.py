@@ -77,7 +77,7 @@ class Warehouse(ABC):
         super().__init_subclass__(**kwargs)
         if not cls.__dict__.get("metered", True):
             return
-        for name in ("execute", "query", "load"):
+        for name in ("execute", "query", "query_limited", "load"):
             fn = cls.__dict__.get(name)
             if fn is not None and not getattr(fn, "_metered", False):
                 setattr(cls, name, _metered(fn))
@@ -101,6 +101,11 @@ class Warehouse(ABC):
 
     @abstractmethod
     def close(self) -> None: ...
+
+    def query_limited(self, sql: str, seconds: float) -> pl.DataFrame:
+        """``query``, stopped with an error if it runs longer than ``seconds``. Backends override it;
+        this default has no limit."""
+        return self.query(sql)
 
     def scalar(self, sql: str) -> object:
         df = self.query(sql)

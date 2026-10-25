@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from functools import lru_cache
 from pathlib import Path
 
@@ -34,6 +35,10 @@ class DuckDBWarehouse(Warehouse):
                     "for example `causa serve` and `causa mcp`). Stop the other one, or use Exasol."
                 ) from exc
             self._con.execute("USE warehouse")
+        # No statement may touch the file system or the environment (read_text('/proc/self/environ'),
+        # COPY, ATTACH, ...): the warehouse file is attached above, and that is all Causa needs.
+        self._con.execute("SET enable_external_access = false")
+        self._con.execute("SET lock_configuration = true")
 
     def execute(self, sql: str) -> int:
         rows = self._con.execute(exasol_to_duckdb(sql)).fetchall()
@@ -43,6 +48,14 @@ class DuckDBWarehouse(Warehouse):
 
     def query(self, sql: str) -> pl.DataFrame:
         return lower_columns(self._con.execute(exasol_to_duckdb(sql)).pl())
+
+    def query_limited(self, sql: str, seconds: float) -> pl.DataFrame:
+        timer = threading.Timer(seconds, self._con.interrupt)
+        timer.start()
+        try:
+            return lower_columns(self._con.execute(exasol_to_duckdb(sql)).pl())
+        finally:
+            timer.cancel()
 
     def load(self, df: pl.DataFrame, table: str) -> int:
         if df.is_empty():

@@ -22,6 +22,7 @@ from causa.health import Severity
 from causa.metrics.attribution import Attributor, Driver, Explanation, Period, Segment
 from causa.metrics.definitions import MetricDefinition
 from causa.recall import recall, short_cause
+from causa.sources.catalog import is_company_table
 from causa.verdict import Verdict
 from causa.warehouse import metering
 from causa.workspace import Workspace
@@ -29,6 +30,7 @@ from causa.workspace import Workspace
 log_ = logging.getLogger(__name__)
 
 MAX_SQL_ROWS = 50
+SQL_SECONDS = 20  # run_sql's limit, under the client's 30 s socket timeout
 REFRESH_SECONDS = 300  # how often a long-running server checks the query log for new activity
 VERDICT_CACHE = 32  # investigations remembered per toolbox (a week takes seconds on a remote warehouse)
 
@@ -338,22 +340,57 @@ class Toolbox:
         return out
 
     def run_sql(self, sql: str) -> dict[str, Any]:
-        """Read-only: a single SELECT, capped at MAX_SQL_ROWS rows."""
+        """Read-only: a single SELECT over the company's own tables, capped at MAX_SQL_ROWS rows and
+        SQL_SECONDS seconds. The question may come from anyone, so whatever the model was talked into
+        writing is checked here, not trusted."""
         try:
             statements = sqlglot.parse(sql, read="exasol")
         except sqlglot.errors.SqlglotError as exc:
             return {"error": f"could not parse: {exc}"}
         if len(statements) != 1 or not isinstance(statements[0], exp.Query):
             return {"error": "only a single SELECT statement is allowed"}
-        if any(t.db.upper() == "SIM" for t in statements[0].find_all(exp.Table)):
-            return {"error": "the SIM schema is the simulator's ground truth and is off limits"}
+        refused = self._refuse(statements[0])
+        if refused:
+            return {"error": refused}
         query = statements[0].limit(MAX_SQL_ROWS + 1).sql(dialect="exasol")
-        frame = self.ws.wh.query(query)
+        try:
+            frame = self.ws.wh.query_limited(query, SQL_SECONDS)
+        except Exception as exc:
+            if not _timed_out(exc):
+                raise
+            return {"error": f"stopped after {SQL_SECONDS} s; ask for less, or use the other tools"}
         return {
             "columns": frame.columns,
             "rows": frame.head(MAX_SQL_ROWS).rows(),
             "truncated": frame.height > MAX_SQL_ROWS,
         }
+
+    def _refuse(self, query: exp.Query) -> str | None:
+        """Why ``query`` may not run, or None. Allowed: plain tables in the schemas that hold company
+        data (as the catalog lists them), and the query's own CTEs. Not allowed: system and Causa
+        schemas, the simulator's ground truth, table functions (file readers), SELECT INTO."""
+        if any(True for _ in query.find_all(exp.Into)):
+            return "only a read-only SELECT is allowed (no INTO)"
+        allowed = {t.split(".")[0] for t in self.ws.catalog.tables() if is_company_table(t)}
+        ctes = {c.alias_or_name.upper() for c in query.find_all(exp.CTE)}
+        for table in query.find_all(exp.Table):
+            if not isinstance(table.this, exp.Identifier):
+                return "only tables can be queried (no table functions)"
+            name, schema = table.name.upper(), table.db.upper()
+            if not schema and not table.catalog and name in ctes:
+                continue
+            if table.catalog or not schema:
+                return f"name tables as SCHEMA.TABLE; {table.sql(dialect='exasol')} is not one"
+            if schema == "SIM":
+                return "the SIM schema is the simulator's ground truth and is off limits"
+            if schema not in allowed:
+                return f"schema {schema} is not company data; allowed: {', '.join(sorted(allowed))}"
+        return None
+
+
+def _timed_out(exc: BaseException) -> bool:
+    text = str(getattr(exc, "message", None) or exc).lower()
+    return "timeout" in text or "interrupt" in text
 
 
 _PERIOD = "ISO date range 'YYYY-MM-DD..YYYY-MM-DD' (inclusive) or a single ISO date"
@@ -457,8 +494,9 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "run_sql",
-        "description": f"Run one read-only SELECT (Exasol SQL dialect) against the warehouse; at most {MAX_SQL_ROWS} "
-        "rows are returned. Use only for facts the other tools do not provide.",
+        "description": f"Run one read-only SELECT (Exasol SQL dialect) over the company's own tables, named "
+        f"SCHEMA.TABLE (system, query-log and Causa schemas are refused); at most {MAX_SQL_ROWS} rows and "
+        f"{SQL_SECONDS} seconds. Use only for facts the other tools do not provide.",
         "input_schema": {
             "type": "object",
             "properties": {"sql": {"type": "string", "description": "A single SELECT statement."}},
