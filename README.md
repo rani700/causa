@@ -31,8 +31,10 @@ Scored against ground truth on [20 randomly drawn companies](docs/benchmark.md) 
 | Alerts that match a real incident | **93%** |
 | Verdicts whose data impact is within 10% of the change | **218 / 220** (median error 0.0%) |
 
-Both misses, and every false alarm, are listed in the report: the simulator is a benchmark, so these
-numbers say the engines work on these kinds of incidents, not that they will on every warehouse.
+Both misses (a big promotion partly read as a data problem; a late batch whose missing order lines
+were not recognised as healed) and every false alarm are listed in the report. The simulator is a
+benchmark: these numbers say the engines work on these kinds of incidents, not that they will on
+every warehouse. Reproduce with `uv run causa eval bench --seeds 20`.
 
 ## Status
 
@@ -395,7 +397,7 @@ src/causa/
   simulator/     synthetic company, scenario, incidents, workloads
   cli.py
 tests/
-docs/            benchmark report
+docs/            benchmark report, hackathon write-up, demo script
 docker/          docker-compose for a local Exasol (x86_64)
 Dockerfile       the production image (built by CI only)
 ```
