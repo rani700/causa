@@ -130,3 +130,17 @@ def test_default_scenario_mixes_business_and_data_events() -> None:
 )
 def test_command_name(sql: str, expected: str) -> None:
     assert command_name(sql) == expected
+
+
+def test_random_scenarios_are_varied_and_valid() -> None:
+    from causa.benchmark import random_scenario
+
+    drawn = [random_scenario(seed) for seed in range(1, 6)]
+    assert all(9 <= len(s.events) <= 12 for s in drawn)
+    assert len({tuple(e.kind for e in s.events) for s in drawn}) == 5  # every company has its own story
+    for s in drawn:
+        churned = [e.customer_name for e in s.events if e.kind == "customer_churn"]
+        assert len(churned) == len(set(churned))  # a customer churns once
+        assert sum(e.kind == "market_launch" for e in s.events) <= 1
+        assert all(s.start <= e.start <= s.start + timedelta(days=s.days) for e in s.events)
+    assert random_scenario(3) == random_scenario(3)  # reproducible

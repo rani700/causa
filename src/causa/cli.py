@@ -6,14 +6,14 @@ import time
 from datetime import date, datetime, timedelta
 from datetime import time as dtime
 from pathlib import Path
-from typing import Annotated, cast
+from typing import Annotated
 
 import typer
 from rich.console import Console
 from rich.progress import Progress
 from rich.table import Table
 
-from causa.evaluation import VerdictResult, evaluate_health, load_events, true_data_gap
+from causa.evaluation import evaluate_health, evaluate_verdicts, load_events
 from causa.health import HealthReport, HealthScanner, Severity
 from causa.lineage import LineageGraph, build_lineage
 from causa.metrics.attribution import Attributor, Period
@@ -445,43 +445,8 @@ def eval_verdict(
 ) -> None:
     """Does the estimated data impact match what data problems really did to net revenue?"""
     definition = load_config(config).metric("net_revenue")
-    results = []
-    with connect() as wh:
-        events = load_events(wh)
-        log_frame = TableQueryLog(wh).fetch()
-        catalog = Catalog.load(wh)
-        graph = build_lineage(log_frame, catalog)
-        first = cast(date, events["start_date"].min())
-        last = cast(date, events["start_date"].max())
-        with console.status("Scanning health once for all windows"):
-            report = HealthScanner(wh, catalog, graph).scan(
-                first - timedelta(days=7), last + timedelta(days=10), log_frame
-            )
-        investigator = Investigator(wh, catalog, graph, log_frame, report, replay=replay)
-        for ev in events.iter_rows(named=True):
-            current = Period(ev["start_date"], ev["start_date"] + timedelta(days=6))
-            baseline = current.same_weekdays_before()
-            with console.status(f"Judging {ev['event_id']} ({current})"):
-                v = investigator.verdict(definition, current, baseline)
-            reported, gap = true_data_gap(wh, "NET_REVENUE_EUR", current, baseline)
-            sds = [f.estimate.sd for f in v.data_findings if f.estimate.sd]
-            band = None
-            if sds and len(sds) == len(v.data_findings):
-                spread = 2 * sum(sd**2 for sd in sds) ** 0.5
-                band = (v.data_impact - spread, v.data_impact + spread)
-            results.append(
-                VerdictResult(
-                    ev["event_id"],
-                    ev["nature"],
-                    ev["kind"],
-                    str(current),
-                    reported,
-                    gap,
-                    v.data_impact,
-                    band,
-                    len(v.data_findings),
-                )
-            )
+    with connect() as wh, console.status("Scanning health once for all windows") as status:
+        results = evaluate_verdicts(wh, definition, replay, lambda e: status.update(f"Judging {e}"))
     table = Table(title="Verdict engine vs ground truth (net revenue, week starting at each event)")
     for col in ("event", "nature", "kind", "reported change", "true data gap", "Causa data impact", "error"):
         table.add_column(col, justify="right" if "change" in col or "gap" in col or "impact" in col else "left")
@@ -507,6 +472,26 @@ def eval_verdict(
         f"worst {errors[-1]:.1%}; within 10% or the 95% band: "
         f"{good}/{len(results)}"
     )
+
+
+@eval_app.command("bench")
+def eval_bench(
+    seeds: Annotated[int, typer.Option(help="How many random companies to simulate and score.")] = 10,
+    first_seed: Annotated[int, typer.Option(help="Seed of the first company.")] = 1,
+    workers: Annotated[int, typer.Option(help="Companies scored in parallel.")] = 4,
+    out: Annotated[str | None, typer.Option(help="Write the Markdown report here.")] = None,
+) -> None:
+    """Score Causa on many randomly drawn companies (in memory; no warehouse needed)."""
+    from causa.benchmark import report_markdown, run_benchmark
+
+    with console.status(f"Simulating and scoring {seeds} companies ({workers} at a time)"):
+        results = run_benchmark(list(range(first_seed, first_seed + seeds)), workers)
+    report = report_markdown(results)
+    console.print(report, highlight=False, soft_wrap=True)
+    if out:
+        Path(out).parent.mkdir(parents=True, exist_ok=True)
+        Path(out).write_text(report)
+        console.print(f"[dim]written to {out}[/]")
 
 
 if __name__ == "__main__":

@@ -8,13 +8,21 @@ This is the only module allowed to read the SIM schema. For the health engine th
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, timedelta
+from typing import cast
 
 import polars as pl
 
-from causa.health import HealthReport, Severity
+from causa.health import HealthReport, HealthScanner, Severity
 from causa.health.models import HealthCase
+from causa.lineage import build_lineage
+from causa.metrics.attribution import Period
+from causa.metrics.definitions import MetricDefinition
+from causa.sources.catalog import Catalog
+from causa.sources.query_log import TableQueryLog
+from causa.verdict import Investigator
 from causa.warehouse import Warehouse
 
 ALERTING = (Severity.CRITICAL, Severity.HIGH)
@@ -132,3 +140,46 @@ def true_data_gap(wh: Warehouse, metric_column: str, current: object, baseline: 
     reported = total("MART.DAILY_REVENUE", current) - total("MART.DAILY_REVENUE", baseline)
     true = total("SIM.TRUE_DAILY_REVENUE", current) - total("SIM.TRUE_DAILY_REVENUE", baseline)
     return reported, reported - true
+
+
+def evaluate_verdicts(
+    wh: Warehouse, metric: MetricDefinition, replay: bool = True, on_event: Callable[[str], None] | None = None
+) -> list[VerdictResult]:
+    """Judge the week starting at each simulated event and compare the data impact with the truth."""
+    events = load_events(wh)
+    if events.is_empty():
+        return []
+    log_frame = TableQueryLog(wh).fetch()
+    catalog = Catalog.load(wh)
+    graph = build_lineage(log_frame, catalog)
+    first = cast(date, events["start_date"].min())
+    last = cast(date, events["start_date"].max())
+    report = HealthScanner(wh, catalog, graph).scan(first - timedelta(days=7), last + timedelta(days=10), log_frame)
+    investigator = Investigator(wh, catalog, graph, log_frame, report, replay=replay)
+    results = []
+    for ev in events.iter_rows(named=True):
+        if on_event:
+            on_event(ev["event_id"])
+        current = Period(ev["start_date"], ev["start_date"] + timedelta(days=6))
+        baseline = current.same_weekdays_before()
+        v = investigator.verdict(metric, current, baseline)
+        reported, gap = true_data_gap(wh, metric.measure_column, current, baseline)
+        sds = [f.estimate.sd for f in v.data_findings if f.estimate.sd]
+        band = None
+        if sds and len(sds) == len(v.data_findings):
+            spread = 2 * sum(sd**2 for sd in sds) ** 0.5
+            band = (v.data_impact - spread, v.data_impact + spread)
+        results.append(
+            VerdictResult(
+                ev["event_id"],
+                ev["nature"],
+                ev["kind"],
+                str(current),
+                reported,
+                gap,
+                v.data_impact,
+                band,
+                len(v.data_findings),
+            )
+        )
+    return results
