@@ -7,44 +7,45 @@
 | Data incidents raised as alerts (recall) | **100%** |
 | Business changes left calm | **97%** |
 | Alerts that match a real incident (precision) | **93%** |
-| Verdicts within 10% of the change (or inside their 95% band) | **219 / 220** |
+| Verdicts within 10% of the change | **218 / 220** |
+| ... further verdicts off by more, but with the truth inside their 95% band | 1 |
 | Median verdict error, share of the change | **0.0%** |
 | Worst verdict error | 232.4% |
 
 ## By company
 
-| Seed | Data / business events | Recall | Calm | Precision | Verdicts OK | Worst error | Time |
+| Seed | Data / business events | Recall | Calm | Precision | Within 10% | Worst error | Time |
 |---:|---:|---:|---:|---:|---:|---:|---:|
-| 1 | 7 / 4 | 100% | 100% | 100% | 11/11 | 0.0% | 47s |
+| 1 | 7 / 4 | 100% | 100% | 100% | 11/11 | 0.0% | 48s |
 | 2 | 5 / 6 | 100% | 83% | 71% | 10/11 | 12.4% | 47s |
 | 3 | 7 / 4 | 100% | 100% | 70% | 11/11 | 0.7% | 48s |
 | 4 | 5 / 6 | 100% | 100% | 83% | 11/11 | 0.1% | 47s |
-| 5 | 5 / 6 | 100% | 100% | 100% | 11/11 | 0.0% | 50s |
+| 5 | 5 / 6 | 100% | 100% | 100% | 11/11 | 0.0% | 49s |
 | 6 | 8 / 3 | 100% | 100% | 89% | 11/11 | 7.9% | 52s |
 | 7 | 4 / 7 | 100% | 100% | 100% | 11/11 | 0.2% | 50s |
 | 8 | 8 / 3 | 100% | 100% | 100% | 11/11 | 0.1% | 51s |
-| 9 | 5 / 6 | 100% | 100% | 71% | 11/11 | 9.5% | 51s |
-| 10 | 3 / 8 | 100% | 100% | 75% | 11/11 | 0.0% | 50s |
-| 11 | 8 / 3 | 100% | 100% | 100% | 11/11 | 3.5% | 53s |
-| 12 | 4 / 7 | 100% | 100% | 100% | 11/11 | 0.2% | 53s |
-| 13 | 8 / 3 | 100% | 100% | 100% | 11/11 | 0.0% | 59s |
-| 14 | 4 / 7 | 100% | 100% | 100% | 11/11 | 0.0% | 57s |
-| 15 | 7 / 4 | 100% | 50% | 100% | 11/11 | 232.4% | 59s |
-| 16 | 5 / 6 | 100% | 100% | 100% | 11/11 | 1.9% | 59s |
-| 17 | 7 / 4 | 100% | 100% | 100% | 11/11 | 0.0% | 61s |
-| 18 | 4 / 7 | 100% | 100% | 100% | 11/11 | 0.3% | 59s |
-| 19 | 8 / 3 | 100% | 100% | 100% | 11/11 | 0.0% | 60s |
-| 20 | 8 / 3 | 100% | 100% | 100% | 11/11 | 0.8% | 59s |
+| 9 | 5 / 6 | 100% | 100% | 71% | 11/11 | 9.5% | 57s |
+| 10 | 3 / 8 | 100% | 100% | 75% | 11/11 | 0.0% | 56s |
+| 11 | 8 / 3 | 100% | 100% | 100% | 11/11 | 3.5% | 60s |
+| 12 | 4 / 7 | 100% | 100% | 100% | 11/11 | 0.2% | 59s |
+| 13 | 8 / 3 | 100% | 100% | 100% | 11/11 | 0.0% | 68s |
+| 14 | 4 / 7 | 100% | 100% | 100% | 11/11 | 0.0% | 66s |
+| 15 | 7 / 4 | 100% | 50% | 100% | 10/11 | 232.4% | 67s |
+| 16 | 5 / 6 | 100% | 100% | 100% | 11/11 | 1.9% | 67s |
+| 17 | 7 / 4 | 100% | 100% | 100% | 11/11 | 0.0% | 68s |
+| 18 | 4 / 7 | 100% | 100% | 100% | 11/11 | 0.3% | 67s |
+| 19 | 8 / 3 | 100% | 100% | 100% | 11/11 | 0.0% | 66s |
+| 20 | 8 / 3 | 100% | 100% | 100% | 11/11 | 0.8% | 64s |
 
 ## By kind of event
 
-| Kind | Nature | Verdicts | OK | Median error |
+| Kind | Nature | Verdicts | Within 10% | Median error |
 |---|---|---:|---:|---:|
 | customer_churn | business | 25 | 25 | 0.0% |
 | demand_shift | business | 23 | 23 | 0.0% |
 | duplicate_load | data | 14 | 14 | 0.0% |
 | fx_corruption | data | 20 | 20 | 0.1% |
-| job_failure | data | 24 | 24 | 0.0% |
+| job_failure | data | 24 | 23 | 0.0% |
 | late_arrival | data | 25 | 24 | 0.0% |
 | market_launch | business | 12 | 12 | 0.0% |
 | null_foreign_key | data | 23 | 23 | 0.0% |
@@ -52,8 +53,9 @@
 | promotion | business | 20 | 20 | 0.0% |
 | schema_drift_stall | data | 14 | 14 | 0.0% |
 
-## Verdicts outside the bar
+## Every verdict off by more than 10% of the change
 
-| Seed | Event | Kind | Reported change | True gap | Causa | Error |
-|---:|---|---|---:|---:|---:|---:|
-| 2 | D11 | late_arrival | -2,033,188 | -0 | -252,242 | 12.4% |
+| Seed | Event | Kind | Reported change | True gap | Causa | Error | Truth in 95% band |
+|---:|---|---|---:|---:|---:|---:|---|
+| 2 | D11 | late_arrival | -2,033,188 | -0 | -252,242 | 12.4% | no |
+| 15 | D4 | job_failure | -232,010 | -0 | -539,166 | 232.4% | yes |

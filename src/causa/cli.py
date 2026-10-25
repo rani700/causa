@@ -384,6 +384,36 @@ def mcp(query_log: QueryLogOption = "OPS.QUERY_LOG", config: ConfigOption = "cau
 
 
 @app.command()
+def init(
+    out: Annotated[str, typer.Option(help="Where to write the proposed configuration.")] = "causa.yaml",
+    metrics: Annotated[int, typer.Option(help="How many metrics to propose at most.")] = 3,
+    force: Annotated[bool, typer.Option(help="Overwrite an existing file.")] = False,
+) -> None:
+    """Look at a warehouse and propose metric definitions to start from (writes causa.yaml)."""
+    from causa.onboarding import audit_access, propose, render
+
+    target = Path(out)
+    if target.exists() and not force:
+        raise typer.BadParameter(f"{out} exists; pass --force to overwrite, or --out another file")
+    with connect() as wh, console.status("Reading the catalog and profiling candidate tables"):
+        proposed, ranked = propose(wh, metrics)
+        audit = audit_access(wh) if wh.name == "exasol" else None
+    if not proposed:
+        console.print("[yellow]No table looks like a business fact (a date plus an amount or quantity).[/]")
+        raise typer.Exit(1)
+    target.write_text(render(proposed, audit))
+    console.print(f"Proposed {len(proposed)} metric(s) from {len(ranked)} candidate tables:")
+    for m in proposed:
+        console.print(
+            f"  [bold]{m.name}[/]: SUM({m.measure_column}) from {m.table} by {m.time_column}; "
+            f"dimensions {', '.join(m.dimensions)}"
+        )
+    if audit is not None:
+        console.print(f"Audit log: {'readable' if audit['readable'] else 'not readable: ' + audit['reason']}")
+    console.print(f"[dim]Written to {out}. Review it, then: causa serve --config {out}[/]")
+
+
+@app.command()
 def watch(
     once: Annotated[bool, typer.Option(help="One round, then exit (for cron); otherwise keep watching.")] = False,
     every: Annotated[float, typer.Option(help="Minutes between rounds when watching.")] = 15,
