@@ -4,28 +4,52 @@
 
 When a KPI moves, Causa answers the three questions that usually take a data team days:
 
-1. **Why did it move?** Which segments drove the change.
-2. **Is it real, or did the data break?** It separates genuine business change from data incidents, with evidence.
-3. **Who consumed the wrong number?** Every dashboard, report, ML model and sync that used affected data.
+1. **Is it real, or did the data break?** It splits the change into data incidents and real business
+   change, and measures each incident's exact effect by re-running the company's own pipeline on
+   repaired data.
+2. **Why did it move?** Which segments drove the real part of the change.
+3. **Who consumed the wrong number?** Every dashboard, report, ML model and sync that read affected
+   data, with a correction notice for each.
 
 Data observability tools flag broken tables but can't say what that means for revenue. BI "explain"
-features break revenue down but assume the data is correct. Causa joins the two.
+features break revenue down but assume the data is correct. Causa joins the two, from nothing more
+than read access to the warehouse and its query log.
+
+**Live demo: https://causa.codeshare.co.in** (start the guided tour:
+https://causa.codeshare.co.in/?tour=1). It runs on Exasol SaaS, and on a built-in copy of the same
+data while the trial cluster is asleep.
+
+### How well it works
+
+Scored against ground truth on [20 randomly drawn companies](docs/benchmark.md) (120 data incidents,
+100 business changes):
+
+| | |
+|---|---|
+| Data incidents raised as alerts | **100%** |
+| Business changes left calm (not alerted as data problems) | **97%** |
+| Alerts that match a real incident | **93%** |
+| Verdicts whose data impact is within 10% of the change | **218 / 220** (median error 0.0%) |
+
+Both misses, and every false alarm, are listed in the report: the simulator is a benchmark, so these
+numbers say the engines work on these kinds of incidents, not that they will on every warehouse.
 
 ## Status
 
-| Engine | State |
+| | |
 |---|---|
-| Synthetic company simulator (benchmark with ground truth) | ✅ |
-| 1. Lineage from the query log (column-level + row-gating predicates + blast radius) | ✅ |
-| 2. Data health detectors, lineage-focused, grouped into cases | ✅ |
-| 3. Metric attribution (recursive drill-down, Shapley volume/rate split, significance, restatements) | ✅ |
-| 4. Business-vs-data verdict (linkage, mechanism-aware impact estimates, evidence, confidence) | ✅ |
-| 5. Counterfactual replay (re-runs the real pipeline on repaired data) + recall with notices | ✅ |
-| Investigator agent (Claude + engine tools), morning brief, Slack, HTTP API | ✅ |
-| Validated end to end on Exasol SaaS (2025.1) | ✅ |
-| Web UI (overview, incidents, lineage map with blast radius, ask) | ✅ |
-| MCP server: the same tools in Claude Desktop / Claude Code, on a Claude plan | ✅ |
-| Cost per decision | ⏳ next |
+| Lineage from the query log (column-level, row-gating predicates, blast radius) | ✅ |
+| Data health detection, lineage-focused, grouped into cases | ✅ |
+| Metric attribution (drill-down, volume/rate split, significance, restatements) | ✅ |
+| Business-vs-data verdict with evidence and confidence | ✅ |
+| Counterfactual replay of the real pipeline, recall with correction notices | ✅ |
+| Web UI with a guided tour; HTTP API; CLI | ✅ |
+| Investigator agent on Claude or OpenAI (`gpt-5-nano`), with cost per answer | ✅ |
+| MCP server for Claude Desktop / Claude Code | ✅ |
+| Watch: each new serious incident announced once, daily brief, Slack | ✅ |
+| `causa init`: metric definitions proposed for a real warehouse | ✅ |
+| Production: failover to a local copy, live refresh, health/readiness probes, container image | ✅ |
+| Validated end to end on Exasol SaaS (2025.1); benchmark on 20 random companies | ✅ |
 
 ## Quickstart
 
@@ -47,7 +71,9 @@ uv run causa brief net_revenue --day 2026-10-08          # add --post with CAUSA
 uv run causa ask "Why did revenue drop last week? Is it real?"   # needs OPENAI_API_KEY or ANTHROPIC_API_KEY in .env
 uv run causa serve                 # web UI at http://127.0.0.1:8000, API docs at /docs
 uv run causa mcp                   # MCP server (stdio) for Claude Desktop / Claude Code
-make test
+uv run causa watch --once          # announce new serious incidents (Slack with CAUSA_SLACK_WEBHOOK_URL)
+uv run causa eval bench --seeds 20 # score both engines on 20 randomly drawn companies
+make test lint
 ```
 
 ### Running against Exasol
@@ -80,6 +106,49 @@ Frankfurt; small batches go through a prepared `INSERT`, large ones through `IMP
 
 All SQL is authored in the **Exasol dialect**. The DuckDB backend exists only so the engines can be
 developed and tested without a cluster; it transpiles statements with `sqlglot`.
+
+## On your own Exasol
+
+```bash
+cp .env.example .env               # CAUSA_BACKEND=exasol, DSN, user, personal access token
+uv run causa init                  # proposes causa.yaml: metrics, dimensions; checks the audit log
+uv run causa serve --query-log audit
+```
+
+Causa needs a read-only user that can read the tables behind the metrics and Exasol's audit log
+(`SELECT ANY DICTIONARY`; auditing is on by default on SaaS). It writes only to its own schemas:
+`CAUSA` (metric snapshots, notifications) and `CAUSA_REPLAY` (scratch tables of a replay, dropped
+after each run). Nothing in the pipeline has to change.
+
+## Running it in production
+
+The image `ghcr.io/rani700/causa` is built by CI on every push to `main` (see
+`.github/workflows/`); it serves the web UI and API on port 8000 and bakes in the demo company as
+the fallback copy.
+
+- **Failover.** With `CAUSA_FALLBACK_DUCKDB_PATH` set, a lost Exasol connection (never an SQL error)
+  switches to a local DuckDB copy, retried every two minutes; the UI says so. Lineage, health and
+  cached answers are rebuilt on whichever backend is active.
+- **Fresh data.** Every five minutes Causa checks the query log's newest statement; new activity
+  reloads lineage and health and drops cached answers.
+- **Fast on a remote warehouse.** Each incident is replayed once and reused by every week it touches;
+  answers are cached per question; the server prepares every incident's investigation at start.
+- **Cost per decision.** Every investigation reports the warehouse statements and database seconds
+  it took (or that it came from cache), every agent answer its token cost in dollars.
+- **Probes.** `GET /health` (process up) and `GET /ready` (which warehouse answers, warm-up state).
+- **Concurrency.** One warehouse connection, used by one engine task at a time; the agent holds it
+  only while a tool runs, never while the model thinks.
+
+| Setting | Meaning |
+|---|---|
+| `CAUSA_BACKEND` | `exasol` or `duckdb` |
+| `CAUSA_EXASOL_DSN`, `_USER`, `_PASSWORD`, `_ENCRYPTION` | Exasol connection (password: a personal access token on SaaS) |
+| `CAUSA_FALLBACK_DUCKDB_PATH` | local copy to answer from while Exasol is away |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | the agent's model (Ask tab, `causa ask`) |
+| `CAUSA_AGENT_PROVIDER`, `CAUSA_OPENAI_MODEL` | force a provider; pick an OpenAI model (default `gpt-5-nano`) |
+| `CAUSA_SLACK_WEBHOOK_URL` | where alerts and briefs are posted |
+| `CAUSA_WATCH_MINUTES` | how often the server looks for new serious incidents (0 = off) |
+| `CAUSA_BRIEF_AT`, `CAUSA_BRIEF_METRIC` | daily brief time (`HH:MM`) and metric |
 
 ## How it works
 
@@ -228,6 +297,8 @@ A dependency-free single page (`src/causa/web/`, plain HTML/CSS/JS, no build ste
   anything to trace it up and down, see the columns that gate its rows and its schema changes, and light up
   everything a broken table would hit.
 - **Ask**: the investigator agent, with every tool call it made shown under its answer (needs `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in `.env`).
+- **Take the tour** (or open `/?tour=1`): six stops through the story, starting at the latest critical
+  incident, so it works on any data.
 
 **Speed on a remote warehouse.** Every query is a round trip (about 0.3 s from India to Frankfurt),
 so Causa avoids repeating them. A replay depends on the incident, not on the week being judged, so
@@ -304,7 +375,7 @@ open in only one process, so stop `causa serve` while Claude uses it (Exasol has
 
 ```
 src/causa/
-  warehouse/     Exasol (pyexasol) and DuckDB backends behind one interface
+  warehouse/     Exasol (pyexasol) and DuckDB backends, failover between them, metering
   sources/       query-log sources (Exasol audit log, table) and the catalog
   lineage/       statement parser, actor identification, lineage graph
   health/        monitor discovery, profiling SQL, detectors, cases
@@ -312,14 +383,19 @@ src/causa/
   verdict/       linkage, impact estimators, evidence and verdicts
   replay/        repair inference and counterfactual replay of the pipeline
   recall.py      exposure, consumers and correction notices
-  agent/         investigator agent (Claude tool-use loop) and its engine-backed tools
+  agent/         investigator agent (Claude or OpenAI tool-use loop), its tools, pricing
   brief.py       deterministic morning brief (text and Slack Block Kit); slack.py posts it
   api.py         FastAPI service; workspace.py caches what the engines share
   mcp_server.py  the agent's tools over MCP (stdio), for Claude Desktop and Claude Code
+  watch.py       new-incident alerts and the daily brief, recorded in CAUSA.NOTIFICATIONS
+  onboarding.py  causa init: metric definitions proposed from the catalog
+  benchmark.py   randomly drawn companies, scored in parallel (causa eval bench)
   store.py       Causa's own tables (CAUSA schema)
   evaluation.py  scoring against the simulator's ground truth
   simulator/     synthetic company, scenario, incidents, workloads
   cli.py
 tests/
+docs/            benchmark report
 docker/          docker-compose for a local Exasol (x86_64)
+Dockerfile       the production image (built by CI only)
 ```
