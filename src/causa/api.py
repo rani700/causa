@@ -82,6 +82,28 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
 
+    last_status: dict[str, Any] = {}
+
+    def warehouse_state() -> Any:
+        failover = getattr(workspace.wh, "status", None)
+        return failover() if callable(failover) else None
+
+    def load_status() -> dict[str, Any]:
+        with engine():
+            metrics = toolbox.list_metrics()
+            first = cast("datetime | None", workspace.query_log["start_time"].min())
+        last_status.update(
+            backend=workspace.wh.name,
+            warehouse=warehouse_state(),
+            query_log="Exasol audit log" if workspace.query_log_table == "audit" else workspace.query_log_table,
+            today=metrics["today"],
+            history_start=str(first.date()) if first else None,
+            metrics=metrics["metrics"],
+            agent_available=agent_available,
+            agent_provider=str(provider) if provider else None,
+        )
+        return dict(last_status)
+
     page = versioned_index()
     warming = {"state": "off"}
 
@@ -89,6 +111,7 @@ def create_app(
         warming["state"] = "running"
         started = time.monotonic()
         try:
+            load_status()  # first, so page loads never wait behind the warm-up
             n = toolbox.warm_up()
             warming["state"] = f"done: {n} investigations in {time.monotonic() - started:.0f}s"
         except Exception as exc:  # never take the server down for a cache
@@ -140,19 +163,13 @@ def create_app(
 
     @app.get("/status")
     def status() -> Any:
-        with engine():
-            metrics = toolbox.list_metrics()
-            first = cast("datetime | None", workspace.query_log["start_time"].min())
-        return {
-            "backend": workspace.wh.name,
-            "warehouse": failover() if callable(failover := getattr(workspace.wh, "status", None)) else None,
-            "query_log": "Exasol audit log" if workspace.query_log_table == "audit" else workspace.query_log_table,
-            "today": metrics["today"],
-            "history_start": str(first.date()) if first else None,
-            "metrics": metrics["metrics"],
-            "agent_available": agent_available,
-            "agent_provider": str(provider) if provider else None,
-        }
+        """What the UI needs to start. While engine work holds the warehouse (a health scan can take
+        20 s), the last answer is served instead of making every page load wait behind it."""
+        if last_status and not lock.acquire(blocking=False):
+            return {**last_status, "warehouse": warehouse_state()}
+        if last_status:
+            lock.release()
+        return load_status()
 
     @app.get("/metrics")
     def metrics() -> Any:
