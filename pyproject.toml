@@ -3,6 +3,7 @@ name = "causa"
 version = "0.1.0"
 description = "Root-cause engine for business metrics on Exasol: separates real business change from data incidents."
 readme = "README.md"
+license = "MIT"
 authors = [
     { name = "Shweta Rani", email = "shwetanimesh700@gmail.com" }
 ]

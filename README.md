@@ -15,9 +15,12 @@ Data observability tools flag broken tables but can't say what that means for re
 features break revenue down but assume the data is correct. Causa joins the two, from nothing more
 than read access to the warehouse and its query log.
 
-**Live demo: https://causa.codeshare.co.in** (start the guided tour:
-https://causa.codeshare.co.in/?tour=1). It runs on Exasol SaaS, and on a built-in copy of the same
-data while the trial cluster is asleep.
+- **Live demo:** https://causa.codeshare.co.in (guided tour: https://causa.codeshare.co.in/?tour=1).
+  It runs on Exasol SaaS, and on a built-in copy of the same data while the trial cluster is asleep.
+- **Problem statement:** [docs/problem-statement.md](docs/problem-statement.md)
+- **Deployment and run guide:** [docs/deployment.md](docs/deployment.md)
+- **Demo video:** (link added at submission)
+- **Pitch deck:** (link added at submission)
 
 ### How well it works
 
@@ -53,12 +56,38 @@ every warehouse. Reproduce with `uv run causa eval bench --seeds 20`.
 | Production: failover to a local copy, live refresh, health/readiness probes, container image | ✅ |
 | Validated end to end on Exasol SaaS (2025.1); benchmark on 20 random companies | ✅ |
 
-## Quickstart
+## Setup
+
+Prerequisites: Python 3.12 or newer and [uv](https://docs.astral.sh/uv/). Docker only if you want a
+local Exasol (`make exasol-up`). No Exasol is needed to try Causa: by default it runs on a built-in
+DuckDB copy of the demo company.
 
 ```bash
-uv sync
+git clone https://github.com/rani700/causa.git && cd causa
+uv sync                            # install (or: make install)
+uv run causa sim run               # build the demo company in data/causa.duckdb (~70s)
+make test                          # uv run pytest -q
+make lint                          # ruff, ruff format --check, mypy
+```
+
+## Usage
+
+### Web UI and API
+
+```bash
+uv run causa serve                 # web UI at http://127.0.0.1:8000, API docs at /docs
+```
+
+Open http://127.0.0.1:8000/?tour=1 for the guided tour. The API serves `/metrics`,
+`/metrics/{m}/explain|verdict|recall|brief`, `/health/cases`, `/lineage/{table}` and `POST /ask`;
+`/health` and `/ready` are the liveness and readiness probes.
+
+### CLI
+
+`uv run causa --help` lists every command. On the demo company:
+
+```bash
 uv run causa sim scenario          # the business events and data incidents that will be injected
-uv run causa sim run               # 168 days of a simulated company, with nightly metric snapshots (~70s)
 uv run causa lineage trace RPT.V_EXEC_REVENUE_DAILY --column NET_REVENUE_EUR
 uv run causa lineage impact RAW.SHOP_ORDERS --since 2026-10-06 --until 2026-10-12
 uv run causa health scan --since 2026-05-25 --until 2026-10-17
@@ -71,14 +100,44 @@ uv run causa eval verdict          # data impact (replayed) vs the true gap, for
 uv run causa recall net_revenue --current 2026-10-06..2026-10-12 --out notices.md
 uv run causa brief net_revenue --day 2026-10-08          # add --post with CAUSA_SLACK_WEBHOOK_URL set
 uv run causa ask "Why did revenue drop last week? Is it real?"   # needs OPENAI_API_KEY or ANTHROPIC_API_KEY in .env
-uv run causa serve                 # web UI at http://127.0.0.1:8000, API docs at /docs
 uv run causa mcp                   # MCP server (stdio) for Claude Desktop / Claude Code
 uv run causa watch --once          # announce new serious incidents (Slack with CAUSA_SLACK_WEBHOOK_URL)
 uv run causa eval bench --seeds 20 # score both engines on 20 randomly drawn companies
-make test lint
 ```
 
-### Running against Exasol
+### MCP: Claude Desktop and Claude Code (no API key)
+
+`causa mcp` serves the agent's tools over the [Model Context Protocol](https://modelcontextprotocol.io).
+The client's own Claude does the investigating, on the user's Claude plan, and every figure still
+comes from Causa's engines. The tools are the same definitions the agent uses (marked read-only),
+the server tells the client how to investigate (start with `judge_change`, never compute figures,
+keep data incidents and business change apart), and the warehouse connection opens on the first
+tool call. Backend and credentials come from `.env`, as for every other command.
+
+**Claude Code**: the repository's `.mcp.json` registers it; start `claude` in the repository and
+approve the `causa` server. Then ask, for example, *"Use causa: why did net revenue move in the week
+of 2026-10-06, and who saw wrong numbers?"*
+
+**Claude Desktop**: Settings → Developer → Edit Config, add the server, and restart Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "causa": {
+      "command": "/absolute/path/to/uv",
+      "args": ["--directory", "/absolute/path/to/causa", "run", "causa", "mcp"]
+    }
+  }
+}
+```
+
+Use absolute paths (`which uv`): Claude Desktop does not start from your shell. Add
+`"env": {"CAUSA_BACKEND": "duckdb"}` to use the local copy instead of Exasol. A DuckDB file can be
+open in only one process, so stop `causa serve` while Claude uses it (Exasol has no such limit).
+
+## Running on Exasol
+
+### Against Exasol
 
 Exasol SaaS (free trial at https://cloud.exasol.com/signup): create a database, add your IPv4 to
 **Security → allow list**, and take the connection string, user name and a personal access token
@@ -109,7 +168,7 @@ Frankfurt; small batches go through a prepared `INSERT`, large ones through `IMP
 All SQL is authored in the **Exasol dialect**. The DuckDB backend exists only so the engines can be
 developed and tested without a cluster; it transpiles statements with `sqlglot`.
 
-## On your own Exasol
+### On your own Exasol
 
 ```bash
 cp .env.example .env               # CAUSA_BACKEND=exasol, DSN, user, personal access token
@@ -120,9 +179,13 @@ uv run causa serve --query-log audit
 Causa needs a read-only user that can read the tables behind the metrics and Exasol's audit log
 (`SELECT ANY DICTIONARY`; auditing is on by default on SaaS). It writes only to its own schemas:
 `CAUSA` (metric snapshots, notifications) and `CAUSA_REPLAY` (scratch tables of a replay, dropped
-after each run). Nothing in the pipeline has to change.
+after each run). Nothing in the pipeline has to change. The permissions are listed in
+[docs/deployment.md](docs/deployment.md#database-permissions).
 
 ## Running it in production
+
+Step-by-step instructions (local, Exasol SaaS, Docker, Kubernetes with Argo CD) are in
+[docs/deployment.md](docs/deployment.md). In short:
 
 The image `ghcr.io/rani700/causa` is built by CI on every push to `main` (see
 `.github/workflows/`); it serves the web UI and API on port 8000 and bakes in the demo company as
@@ -343,36 +406,6 @@ as text or Slack Block Kit and posts only with `--post` and a configured `CAUSA_
 `causa serve` exposes the same through FastAPI: `/metrics`, `/metrics/{m}/explain|verdict|recall|brief`,
 `/health/cases`, `/lineage/{table}` and `POST /ask` (multi-turn by `conversation_id`).
 
-### In Claude Desktop or Claude Code (MCP, no API key)
-
-`causa mcp` serves the agent's tools over the [Model Context Protocol](https://modelcontextprotocol.io).
-The client's own Claude does the investigating, on the user's Claude plan, and every figure still
-comes from Causa's engines. The tools are the same definitions the agent uses (marked read-only),
-the server tells the client how to investigate (start with `judge_change`, never compute figures,
-keep data incidents and business change apart), and the warehouse connection opens on the first
-tool call. Backend and credentials come from `.env`, as for every other command.
-
-**Claude Code**: the repository's `.mcp.json` registers it; start `claude` in the repository and
-approve the `causa` server. Then ask, for example, *"Use causa: why did net revenue move in the week
-of 2026-10-06, and who saw wrong numbers?"*
-
-**Claude Desktop**: Settings → Developer → Edit Config, add the server, and restart Claude Desktop:
-
-```json
-{
-  "mcpServers": {
-    "causa": {
-      "command": "/absolute/path/to/uv",
-      "args": ["--directory", "/absolute/path/to/causa", "run", "causa", "mcp"]
-    }
-  }
-}
-```
-
-Use absolute paths (`which uv`): Claude Desktop does not start from your shell. Add
-`"env": {"CAUSA_BACKEND": "duckdb"}` to use the local copy instead of Exasol. A DuckDB file can be
-open in only one process, so stop `causa serve` while Claude uses it (Exasol has no such limit).
-
 ## Layout
 
 ```
@@ -397,7 +430,12 @@ src/causa/
   simulator/     synthetic company, scenario, incidents, workloads
   cli.py
 tests/
-docs/            benchmark report, hackathon write-up, demo script
+docs/            problem statement, deployment guide, benchmark, project write-up, demo script
 docker/          docker-compose for a local Exasol (x86_64)
 Dockerfile       the production image (built by CI only)
+LICENSE          MIT
 ```
+
+## Licence
+
+MIT, see [LICENSE](LICENSE). Copyright (c) 2026 Shweta Rani.
