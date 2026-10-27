@@ -146,6 +146,17 @@ def test_judge_change_tool_returns_replayed_data_finding(ws) -> None:
     assert finding["method"].startswith("counterfactual replay")
     assert "schema change" in finding["cause"]
     assert out["data_incident_impact"] == finding["impact_on_change"] < 0
+    # The summary says in words which period the incident distorted and in which direction.
+    assert any(
+        "distorted the period being explained" in line and "worse than it really was" in line for line in out["summary"]
+    )
+    assert out["summary"][-1].startswith("Real business change once incidents are removed")
+
+
+def test_periods_after_the_data_are_refused_with_the_right_dates(ws) -> None:
+    after = f"{ws.today}..{ws.today + timedelta(days=6)}"
+    with pytest.raises(ValueError, match=f"latest complete day is {ws.today - timedelta(days=1)}"):
+        Toolbox(ws).call("judge_change", {"metric": "net_revenue", "current": after})
 
 
 # -- the agent loop ----------------------------------------------------------------------------

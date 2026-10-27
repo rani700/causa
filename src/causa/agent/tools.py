@@ -112,6 +112,7 @@ def verdict_dict(v: Verdict) -> dict[str, Any]:
             }
         )
     return {
+        "summary": plain_summary(v, z),
         "headline": explanation_dict(v.explanation) | {"drivers": "see explain_metric"},
         "total_change": _r(total.delta),
         "data_incident_impact": _r(v.data_impact),
@@ -132,6 +133,50 @@ def verdict_dict(v: Verdict) -> dict[str, Any]:
             for r in v.restatements
         ],
     }
+
+
+def _money(x: float, unit: str) -> str:
+    sign = "+" if x > 0 else "-" if x < 0 else ""
+    x = abs(x)
+    amount = f"{x / 1e6:.2f}M" if x >= 1e6 else f"{x / 1e3:.1f}k" if x >= 1e3 else f"{x:.0f}"
+    return f"{sign}{unit + ' ' if unit else ''}{amount}"
+
+
+def plain_summary(v: Verdict, z: float | None) -> list[str]:
+    """The verdict in words, worked out here so no model has to read the signs of the figures: which
+    period an incident distorted, and whether that makes the change look bigger or smaller."""
+    e, unit = v.explanation, v.explanation.metric.unit
+    total = e.total
+    pct = f" ({total.delta / total.baseline:+.0%})" if total.baseline else ""
+    lines = [
+        f"Reported change {_money(total.delta, unit)}{pct}: {e.current.start}..{e.current.end} "
+        f"compared with {e.baseline.start}..{e.baseline.end}."
+    ]
+    for f in v.findings:
+        if not f.is_data or f.duplicate_of is not None:
+            continue
+        est = f.estimate
+        where = (
+            "both periods"
+            if est.current_days and est.baseline_days
+            else "the period being explained"
+            if est.current_days
+            else "the comparison period"
+            if est.baseline_days
+            else "neither period's days directly"
+        )
+        look = "better" if est.impact > 0 else "worse"
+        lines.append(
+            f"Data incident {f.case.case_id} ({short_cause(f)}) distorted {where}. It makes the change "
+            f"look {_money(abs(est.impact), unit).lstrip('+')} {look} than it really was."
+        )
+    if total.baseline:
+        b = v.business_change / total.baseline
+        normal = "" if z is None else ", within normal variation" if abs(z) < 2 else ", unusual for this metric"
+        lines.append(
+            f"Real business change once incidents are removed: {_money(v.business_change, unit)} ({b:+.1%}){normal}."
+        )
+    return lines
 
 
 class Toolbox:
@@ -171,6 +216,13 @@ class Toolbox:
 
     def _periods(self, current: str, baseline: str | None) -> tuple[Period, Period]:
         cur = Period.parse(current)
+        today = self.ws.today
+        if cur.start >= today:
+            week = Period(today - timedelta(days=7), today - timedelta(days=1))
+            raise ValueError(
+                f"there is no data from {cur.start} on: the latest complete day is {today - timedelta(days=1)} "
+                f"(today is {today}). 'Last week' means {week.start}..{week.end}."
+            )
         return cur, Period.parse(baseline) if baseline else cur.same_weekdays_before()
 
     def keep_fresh(self, every: float = REFRESH_SECONDS) -> bool:

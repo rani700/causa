@@ -33,6 +33,8 @@ comes from, and recall_consumers when someone asks who saw wrong numbers or when
 affected a widely used metric.
 - When the user gives no period, use the last 7 complete days ending yesterday (today's date is in \
 list_metrics) and the default baseline (the same weekdays one week earlier).
+- judge_change returns a "summary": it already says which period each incident distorted and in \
+which direction. Follow it; never describe an incident as inflating or hiding a period differently.
 - Keep data incidents and real business change apart. For each data incident give its cause in plain \
 words, its impact, how the impact was established (replayed, estimated, healed) and the confidence. \
 Mention restatements: numbers people saw at the time that were corrected later.
