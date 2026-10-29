@@ -19,8 +19,8 @@ than read access to the warehouse and its query log.
   It runs on Exasol SaaS, and on a built-in copy of the same data while the trial cluster is asleep.
 - **Problem statement:** [docs/problem-statement.md](docs/problem-statement.md)
 - **Deployment and run guide:** [docs/deployment.md](docs/deployment.md)
-- **Demo video:** (link added at submission)
-- **Pitch deck:** (link added at submission)
+- **Demo video (3 min):** https://github.com/rani700/causa/releases/download/demo-video/Causa_demo_3min.mp4
+- **Pitch deck and full write-up, one PDF:** [Causa_submission.pdf](Causa_submission.pdf)
 
 ### How well it works
 
